@@ -1,0 +1,241 @@
+// src/components/layout/DesktopNavbar.jsx
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import { useAuth } from "../../contexts/AuthContext";
+import { useModal } from "../../hooks/useModal";
+import { Dropdown, DropdownItem } from "../ui/Dropdown";
+import { SearchBar } from "../ui/SearchBar";
+import {
+  Upload,
+  User,
+  Menu,
+  LogOut,
+  FileText,
+  Settings,
+  Sparkles,
+  Logo
+} from "../../icons";
+import toast from "react-hot-toast";
+import { useGoogleAuth } from "../../hooks/useGoogleAuth";
+
+export const DesktopNavbar = ({
+  showSearch = false,
+  onSearch,
+  onUploadClick,
+}) => {
+  const { user, logout, handleGoogleOAuth } = useAuth();
+  const { openModal } = useModal();
+  const {
+    isGoogleLoaded,
+    initializeGoogleOneTap,
+    promptGoogleOneTap,
+    triggerGoogleOAuthPopup,
+  } = useGoogleAuth();
+  const [scrolled, setScrolled] = useState(false);
+  const [showNavSearch, setShowNavSearch] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+
+  useEffect(() => {
+    // Check if screen is desktop size
+    const checkScreenSize = () => {
+      setIsDesktop(window.innerWidth >= 768); // md breakpoint
+    };
+
+    checkScreenSize();
+    window.addEventListener("resize", checkScreenSize);
+
+    return () => window.removeEventListener("resize", checkScreenSize);
+  }, []);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollPosition = window.scrollY;
+      setScrolled(scrollPosition > 20);
+
+      // Show search bar in navbar only on desktop when scrolled past hero section (roughly 400px)
+      if (isDesktop) {
+        setShowNavSearch(scrollPosition > 400);
+      } else {
+        setShowNavSearch(false);
+      }
+    };
+
+    handleScroll(); // Call once on mount
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [isDesktop]);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  const handleUpload = () => {
+    if (!user) {
+      handleSignIn();
+    } else {
+      onUploadClick();
+    }
+  };
+
+  useEffect(() => {
+    if (!user && isGoogleLoaded) {
+      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+      if (clientId) {
+        initializeGoogleOneTap(clientId, handleGoogleResponse);
+      }
+    }
+  }, [user, isGoogleLoaded]);
+
+  const handleGoogleResponse = async (response) => {
+    setSigningIn(true);
+    try {
+      await handleGoogleOAuth(response);
+      toast.success("Signed in successfully!");
+    } catch (error) {
+      console.error("Google sign-in failed:", error);
+      toast.error("Sign-in failed. Please try again.");
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    if (signingIn) return;
+
+    setSigningIn(true);
+
+    try {
+      if (isGoogleLoaded) {
+        promptGoogleOneTap(handleGoogleResponse);
+      } else {
+        toast.error("Sign-in service not ready. Please try again.");
+        setSigningIn(false);
+      }
+    } catch (error) {
+      console.error("Sign-in error:", error);
+      toast.error("Failed to initialize sign-in");
+      setSigningIn(false);
+    }
+  };
+
+  return (
+    <nav
+      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
+        scrolled
+          ? "bg-dark-900/80 backdrop-blur-xl border-b border-dark-700"
+          : "bg-transparent"
+      }`}
+    >
+      <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className="flex items-center justify-between">
+          {/* Logo */}
+          <Link href="/" className="flex items-center gap-2 group">
+            <svg width="40" height="40" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="128" cy="128" r="88" stroke="white" stroke-width="20" fill="none"/>
+              <line x1="88" y1="168" x2="168" y2="88" stroke="white" stroke-width="20" stroke-linecap="round"/>
+            </svg>
+            <span className="text-xl text-white font-bold">
+              DocsDB
+            </span>
+          </Link>
+
+          {/* Search Bar - Only shown on desktop when scrolled past hero search */}
+          {showNavSearch && (
+            <div className="hidden md:flex flex-1 max-w-2xl mx-8 animate-fadeIn">
+              <SearchBar onSearch={onSearch} />
+            </div>
+          )}
+
+          {/* Right Side Actions */}
+          <div className="flex items-center gap-4">
+            {/* Upload Button */}
+            <button
+              onClick={handleUpload}
+              className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-dark-200 text-black rounded-xl transition-all duration-200 font-medium"
+            >
+              <Upload size={18} />
+              <span className="hidden sm:inline">Upload</span>
+            </button>
+
+            {/* Profile Dropdown or Sign In Button */}
+            {user ? (
+              <Dropdown
+                trigger={
+                  <button className="flex items-center gap-2 p-2 hover:bg-dark-800 rounded-full transition-all duration-200">
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt={user.name}
+                        className="w-9 h-9 rounded-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-white text-sm font-medium">
+                        {user.name?.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </button>
+                }
+              >
+                <DropdownItem
+                  onClick={() => openModal("profile_modal")}
+                  icon={User}
+                >
+                  Profile
+                </DropdownItem>
+                <DropdownItem icon={FileText}>My Documents</DropdownItem>
+                <DropdownItem
+                  onClick={() => openModal("settings_modal")}
+                  icon={Settings}
+                >
+                  Settings
+                </DropdownItem>
+                <div className="h-px bg-dark-600 my-1" />
+                <DropdownItem
+                  onClick={handleLogout}
+                  icon={LogOut}
+                  className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+                >
+                  Sign Out
+                </DropdownItem>
+              </Dropdown>
+            ) : (
+              <button
+                onClick={handleSignIn}
+                disabled={signingIn}
+                className={`px-4 py-2 border border-dark-600 hover:border-dark-400 text-white rounded-xl transition-all duration-200 font-medium ${
+                  signingIn ? "opacity-50 cursor-not-allowed" : ""
+                }`}
+              >
+                {signingIn ? "Signing in..." : "Sign In"}
+              </button>
+            )}
+
+            {/* Hamburger Menu for Additional Options */}
+            <Dropdown
+              trigger={
+                <button className="p-2.5 hover:bg-dark-800 rounded-full transition-all duration-200 border border-dark-600">
+                  <Menu size={20} className="text-dark-300" />
+                </button>
+              }
+            >
+              <DropdownItem icon={FileText}>Categories</DropdownItem>
+              <DropdownItem icon={Sparkles}>Trending</DropdownItem>
+              <DropdownItem
+                onClick={() => openModal("settings_modal")}
+                icon={Settings}
+              >
+                Preferences
+              </DropdownItem>
+            </Dropdown>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+};

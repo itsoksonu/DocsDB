@@ -1,0 +1,475 @@
+import express from 'express';
+import { query, validationResult } from 'express-validator';
+import { authMiddleware } from '../middleware/auth.js';
+import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import Document from '../../shared/models/Document.js';
+import databaseManager from '../../shared/database/connection.js';
+import { generateFeed } from '../../shared/utils/feedGenerator.js';
+import logger from '../../shared/utils/logger.js';
+
+const router = express.Router();
+
+const redisClient = databaseManager.getRedisClient();
+
+// Input validation for feed queries
+const feedValidation = [
+  query('cursor').optional().isAlphanumeric(),
+  query('limit').optional().isInt({ min: 1, max: 50 }).default(20),
+  query('category').optional().isIn(['technology', 'business', 'education', 'health', 'entertainment', 'other']),
+  query('sort').optional().isIn(['newest', 'popular', 'relevant']).default('newest')
+];
+
+// Get infinite scroll feed (PUBLIC - no auth required)
+router.get('/', 
+  rateLimitMiddleware('search'),
+  feedValidation,
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
+
+      const { cursor, limit, category, sort } = req.query;
+      
+      // For public feed, use a generic user ID or handle differently
+      const userId = req.user?.userId || 'public';
+
+      // Generate cache key
+      const cacheKey = `feed:${userId}:${category || 'all'}:${sort}:${cursor || 'initial'}:${limit}`;
+      
+      // Try to get from cache first
+      if (redisClient) {
+        const cachedFeed = await redisClient.get(cacheKey);
+        if (cachedFeed) {
+          logger.debug(`Cache hit for feed: ${cacheKey}`);
+          return res.json({
+            success: true,
+            data: JSON.parse(cachedFeed)
+          });
+        }
+      }
+
+      // Generate fresh feed
+      const feedData = await generateFeed({
+        userId,
+        cursor,
+        limit: parseInt(limit),
+        category,
+        sort,
+        includeAds: false // No ads for public feed
+      });
+
+      // Cache for 5 minutes
+      if (redisClient && feedData.documents.length > 0) {
+        await redisClient.setEx(cacheKey, 300, JSON.stringify(feedData)); // 5 minutes TTL
+      }
+
+      res.json({
+        success: true,
+        data: feedData
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Search documents (PUBLIC - no auth required)
+router.get('/search',
+  rateLimitMiddleware('search'),
+  [
+    query('q').trim().notEmpty().isLength({ min: 1, max: 100 }),
+    query('type').optional().isIn(['semantic', 'keyword']).default('keyword'),
+    query('category').optional().isIn(['technology', 'business', 'education', 'health', 'entertainment', 'other']),
+    query('page').optional().isInt({ min: 1 }).default(1),
+    query('limit').optional().isInt({ min: 1, max: 50 }).default(20)
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
+
+      const { q, type, category, page, limit } = req.query;
+      const userId = req.user?.userId || 'public';
+
+      const searchResults = await performSearch({
+        query: q,
+        type,
+        category,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        userId
+      });
+
+      res.json({
+        success: true,
+        data: searchResults
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Get related documents (PUBLIC - no auth required)
+router.get('/related/:documentId',
+  [
+    query('limit').optional().isInt({ min: 1, max: 20 }).default(10)
+  ],
+  async (req, res, next) => {
+    try {
+      const { documentId } = req.params;
+      const { limit } = req.query;
+
+      const relatedDocs = await getRelatedDocuments(documentId, parseInt(limit));
+
+      res.json({
+        success: true,
+        data: relatedDocs
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Get trending documents (PUBLIC - no auth required)
+router.get('/trending',
+  [
+    query('timeframe').optional().isIn(['today', 'week', 'month']).default('week'),
+    query('limit').optional().isInt({ min: 1, max: 50 }).default(20)
+  ],
+  async (req, res, next) => {
+    try {
+      const { timeframe, limit } = req.query;
+      const cacheKey = `trending:${timeframe}:${limit}`;
+
+      // Try cache first
+      if (redisClient) {
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+          return res.json({
+            success: true,
+            data: JSON.parse(cached)
+          });
+        }
+      }
+
+      const trendingDocs = await getTrendingDocuments(timeframe, parseInt(limit));
+
+      // Cache for 15 minutes
+      if (redisClient) {
+        await redisClient.setEx(cacheKey, 900, JSON.stringify(trendingDocs));
+      }
+
+      res.json({
+        success: true,
+        data: trendingDocs
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Get categories with counts (PUBLIC - no auth required)
+router.get('/categories',
+  async (req, res, next) => {
+    try {
+      const cacheKey = 'categories:counts';
+
+      if (redisClient) {
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+          return res.json({
+            success: true,
+            data: JSON.parse(cached)
+          });
+        }
+      }
+
+      const categories = await getCategoryCounts();
+
+      // Cache for 1 hour
+      if (redisClient) {
+        await redisClient.setEx(cacheKey, 3600, JSON.stringify(categories));
+      }
+
+      res.json({
+        success: true,
+        data: categories
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// PRIVATE ROUTES (require authentication)
+
+// Get personalized feed (PRIVATE - requires auth)
+router.get('/personalized',
+  authMiddleware,
+  rateLimitMiddleware('search'),
+  feedValidation,
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
+
+      const { cursor, limit, category, sort } = req.query;
+      const userId = req.user.userId;
+
+      // Generate cache key
+      const cacheKey = `feed:personalized:${userId}:${category || 'all'}:${sort}:${cursor || 'initial'}:${limit}`;
+      
+      // Try to get from cache first
+      if (redisClient) {
+        const cachedFeed = await redisClient.get(cacheKey);
+        if (cachedFeed) {
+          logger.debug(`Cache hit for personalized feed: ${cacheKey}`);
+          return res.json({
+            success: true,
+            data: JSON.parse(cachedFeed)
+          });
+        }
+      }
+
+      // Generate personalized feed with ads
+      const feedData = await generateFeed({
+        userId,
+        cursor,
+        limit: parseInt(limit),
+        category,
+        sort,
+        includeAds: true,
+        personalized: true
+      });
+
+      // Cache for 3 minutes (shorter TTL for personalized content)
+      if (redisClient && feedData.documents.length > 0) {
+        await redisClient.setEx(cacheKey, 180, JSON.stringify(feedData));
+      }
+
+      res.json({
+        success: true,
+        data: feedData
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Helper functions
+async function performSearch({ query, type, category, page, limit, userId }) {
+  const skip = (page - 1) * limit;
+  
+  let searchQuery = {
+    status: 'processed',
+    visibility: 'public'
+  };
+
+  // Add category filter if specified
+  if (category) {
+    searchQuery.category = category;
+  }
+
+  // Text search for keyword type
+  if (type === 'keyword') {
+    searchQuery.$text = { $search: query };
+    
+    const [documents, total] = await Promise.all([
+      Document.find(searchQuery)
+        .select('-metadata -embeddingsId')
+        .populate('userId', 'name')
+        .sort({ score: { $meta: 'textScore' } })
+        .skip(skip)
+        .limit(limit),
+      Document.countDocuments(searchQuery)
+    ]);
+
+    return {
+      documents,
+      pagination: {
+        page,
+        limit,
+        total,
+        hasMore: (skip + documents.length) < total
+      },
+      query,
+      type
+    };
+  } else {
+    // Semantic search - placeholder for vector search
+    // This would integrate with Pinecone/Elasticsearch
+    const documents = await Document.find(searchQuery)
+      .select('-metadata -embeddingsId')
+      .populate('userId', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Document.countDocuments(searchQuery);
+
+    return {
+      documents,
+      pagination: {
+        page,
+        limit,
+        total,
+        hasMore: (skip + documents.length) < total
+      },
+      query,
+      type: 'semantic' // Fallback to newest for now
+    };
+  }
+}
+
+async function getRelatedDocuments(documentId, limit) {
+  const document = await Document.findById(documentId);
+  if (!document) {
+    return [];
+  }
+
+  // Find documents with similar tags or same category
+  const relatedDocs = await Document.find({
+    _id: { $ne: documentId },
+    status: 'processed',
+    visibility: 'public',
+    $or: [
+      { category: document.category },
+      { tags: { $in: document.tags.slice(0, 3) } }
+    ]
+  })
+  .select('-metadata -embeddingsId')
+  .populate('userId', 'name')
+  .sort({ viewsCount: -1, createdAt: -1 })
+  .limit(limit);
+
+  return relatedDocs;
+}
+
+async function getTrendingDocuments(timeframe, limit) {
+  const timeFilter = getTimeFilter(timeframe);
+  
+  const trendingDocs = await Document.aggregate([
+    {
+      $match: {
+        status: 'processed',
+        visibility: 'public',
+        createdAt: timeFilter
+      }
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'userId',
+        foreignField: '_id',
+        as: 'user'
+      }
+    },
+    {
+      $unwind: '$user'
+    },
+    {
+      $project: {
+        _id: 1,
+        generatedTitle: 1,
+        generatedDescription: 1,
+        thumbnailS3Path: 1,
+        fileType: 1,
+        viewsCount: 1,
+        downloadsCount: 1,
+        tags: 1,
+        category: 1,
+        createdAt: 1,
+        'user.name': 1,
+        'user._id': 1,
+        // Calculate trending score
+        trendingScore: {
+          $add: [
+            { $multiply: ['$viewsCount', 1] },
+            { $multiply: ['$downloadsCount', 5] }
+          ]
+        }
+      }
+    },
+    {
+      $sort: { trendingScore: -1, createdAt: -1 }
+    },
+    {
+      $limit: limit
+    }
+  ]);
+
+  return trendingDocs;
+}
+
+async function getCategoryCounts() {
+  const counts = await Document.aggregate([
+    {
+      $match: {
+        status: 'processed',
+        visibility: 'public'
+      }
+    },
+    {
+      $group: {
+        _id: '$category',
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $sort: { count: -1 }
+    }
+  ]);
+
+  return counts;
+}
+
+function getTimeFilter(timeframe) {
+  const now = new Date();
+  let startDate;
+
+  switch (timeframe) {
+    case 'today':
+      startDate = new Date(now.setHours(0, 0, 0, 0));
+      break;
+    case 'week':
+      startDate = new Date(now.setDate(now.getDate() - 7));
+      break;
+    case 'month':
+      startDate = new Date(now.setMonth(now.getMonth() - 1));
+      break;
+    default:
+      startDate = new Date(now.setDate(now.getDate() - 7));
+  }
+
+  return { $gte: startDate };
+}
+
+export default router;
