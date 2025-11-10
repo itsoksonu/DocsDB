@@ -131,13 +131,13 @@ export const DesktopNavbar = ({
           : "bg-transparent"
       }`}
     >
-      <div className="max-w-7xl mx-auto px-6 py-4">
+      <div className="max-w-7xl mx-auto px-2 py-4">
         <div className="flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
             <svg width="40" height="40" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="128" cy="128" r="88" stroke="white" stroke-width="20" fill="none"/>
-              <line x1="88" y1="168" x2="168" y2="88" stroke="white" stroke-width="20" stroke-linecap="round"/>
+              <circle cx="128" cy="128" r="88" stroke="white" strokeWidth="20" fill="none"/>
+              <line x1="88" y1="168" x2="168" y2="88" stroke="white" strokeWidth="20" strokeLinecap="round"/>
             </svg>
             <span className="text-xl text-white font-bold">
               DocsDB

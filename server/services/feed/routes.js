@@ -6,6 +6,7 @@ import Document from '../../shared/models/Document.js';
 import databaseManager from '../../shared/database/connection.js';
 import { generateFeed } from '../../shared/utils/feedGenerator.js';
 import logger from '../../shared/utils/logger.js';
+import s3 from '../../shared/utils/s3.js'
 
 const router = express.Router();
 
@@ -15,7 +16,7 @@ const redisClient = databaseManager.getRedisClient();
 const feedValidation = [
   query('cursor').optional().isAlphanumeric(),
   query('limit').optional().isInt({ min: 1, max: 50 }).default(20),
-  query('category').optional().isIn(['technology', 'business', 'education', 'health', 'entertainment', 'other']),
+  query('category').optional().isIn(["technology","business","education","health","entertainment","sports","finance-money-management","games-activities","comics","philosophy","career-growth","politics","biography-memoir","study-aids-test-prep","law","art","science","history","erotica","lifestyle","religion-spirituality","self-improvement","language-arts","cooking-food-wine","true-crime","sheet-music","fiction","non-fiction","science-fiction","fantasy","romance","thriller-suspense","horror","poetry","graphic-novels","young-adult","children","parenting-family","marketing-sales","psychology","social-sciences","engineering","mathematics", "data-science","nature-environment","travel","reference","design", "news-media", "professional-development", "other"],),
   query('sort').optional().isIn(['newest', 'popular', 'relevant']).default('newest')
 ];
 
@@ -63,6 +64,21 @@ router.get('/',
         sort,
         includeAds: false // No ads for public feed
       });
+
+      // ✅ Add signed thumbnails
+      if (feedData.documents?.length > 0) {
+        feedData.documents = await Promise.all(
+          feedData.documents.map(async (doc) => {
+            doc = doc.toObject ? doc.toObject() : doc; // Convert if Mongoose doc
+      
+            if (doc.thumbnailS3Path) {
+              doc.thumbnailUrl = await s3.generateViewUrl(doc.thumbnailS3Path);
+            }
+      
+            return doc;
+          })
+        );
+      }
 
       // Cache for 5 minutes
       if (redisClient && feedData.documents.length > 0) {

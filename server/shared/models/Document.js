@@ -50,7 +50,7 @@ const documentSchema = new mongoose.Schema({
   }],
   category: {
     type: String,
-    enum: ['technology', 'business', 'education', 'health', 'entertainment', 'other'],
+    enum: ["for-you","technology","business","education","health","entertainment","sports","finance-money-management","games-activities","comics","philosophy","career-growth","politics","biography-memoir","study-aids-test-prep","law","art","science","history","erotica","lifestyle","religion-spirituality","self-improvement","language-arts","cooking-food-wine","true-crime","sheet-music","fiction","non-fiction","science-fiction","fantasy","romance","thriller-suspense","horror","poetry","graphic-novels","young-adult","children","parenting-family","marketing-sales","psychology","social-sciences","engineering","mathematics", "data-science", "nature-environment","travel","reference","design", "news-media", "professional-development", "other"],
     default: 'other',
     index: true
   },

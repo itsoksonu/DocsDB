@@ -56,6 +56,14 @@ class S3Manager {
     }
   }
 
+  async generateViewUrl(key, expiresIn = 3600) {
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: key
+    });
+    return await getSignedUrl(this.s3Client, command, { expiresIn });
+  }
+
   async getObjectMetadata(key) {
     try {
       const command = new HeadObjectCommand({
