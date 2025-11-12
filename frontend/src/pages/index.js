@@ -1,5 +1,5 @@
 // src/pages/index.jsx
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { useAuth } from "../contexts/AuthContext";
@@ -10,18 +10,15 @@ import { DocumentCard } from "../components/common/DocumentCard";
 import { DocumentSkeleton } from "../components/ui/Skeleton";
 import { apiService } from "../services/api";
 import toast from "react-hot-toast";
+import Link from "next/link";
+import { Logo } from "../icons";
 
 export default function Home() {
   const { user } = useAuth();
   const { openModal } = useModal();
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [cursor, setCursor] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState("for-you");
-  const [searchQuery, setSearchQuery] = useState("");
-  const observer = useRef();
 
   const router = useRouter();
 
@@ -70,78 +67,47 @@ export default function Home() {
     { id: "social-sciences", name: "Social Sciences" },
     { id: "engineering", name: "Engineering" },
     { id: "mathematics", name: "Mathematics" },
-    { id: "data-science", name: "Data Science"},
-    { id: "news-media", name: "News & Media"},
+    { id: "data-science", name: "Data Science" },
+    { id: "news-media", name: "News & Media" },
     { id: "nature-environment", name: "Nature and Environment" },
     { id: "travel", name: "Travel" },
     { id: "reference", name: "Reference" },
     { id: "design", name: "Design" },
     { id: "professional-development", name: "Professional Development" },
-
     { id: "other", name: "Other" },
   ];
 
-  const loadDocuments = useCallback(
-    async (reset = false) => {
-      try {
-        if (reset) {
-          setLoading(true);
-          setCursor(null);
-        } else {
-          setLoadingMore(true);
-        }
+  const loadDocuments = async () => {
+    try {
+      setLoading(true);
 
-        const params = {
-          limit: 20,
-          cursor: reset ? null : cursor,
-          category: selectedCategory === "for-you" ? null : selectedCategory,
-          sort: selectedCategory === "for-you" ? "relevant" : "newest",
-        };
+      const params = {
+        limit: 42, // Fetch exactly 42 documents
+        category: selectedCategory === "for-you" ? null : selectedCategory,
+        sort: selectedCategory === "for-you" ? "relevant" : "newest",
+      };
 
-        const response = await apiService.getFeed(params);
-        const { documents: newDocs, pagination } = response.data;
+      const response = await apiService.getFeed(params);
+      const { documents: newDocs } = response.data;
 
-        if (reset) {
-          setDocuments(newDocs);
-        } else {
-          setDocuments((prev) => [...prev, ...newDocs]);
-        }
-
-        setCursor(pagination.nextCursor);
-        setHasMore(pagination.hasMore);
-      } catch (error) {
-        toast.error("Failed to load documents");
-      } finally {
-        setLoading(false);
-        setLoadingMore(false);
-      }
-    },
-    [cursor, selectedCategory]
-  );
-
-  const lastDocumentRef = useCallback(
-    (node) => {
-      if (loadingMore) return;
-      if (observer.current) observer.current.disconnect();
-
-      observer.current = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting && hasMore) {
-          loadDocuments();
-        }
-      });
-
-      if (node) observer.current.observe(node);
-    },
-    [loadingMore, hasMore, loadDocuments]
-  );
+      setDocuments(newDocs);
+    } catch (error) {
+      toast.error("Failed to load documents");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    loadDocuments(true);
+    loadDocuments();
   }, [selectedCategory]);
 
+  // Handle search by redirecting to search page
   const handleSearch = (query) => {
-    setSearchQuery(query);
-    // Implement search functionality
+    const trimmed = query.trim();
+    if (trimmed && trimmed !== router.query.q) {
+      router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+    }
   };
 
   const handleUploadClick = () => {
@@ -150,10 +116,6 @@ export default function Home() {
     } else {
       router.push("/upload");
     }
-  };
-
-  const handleMobileSearchClick = () => {
-    openModal("search_modal");
   };
 
   return (
@@ -177,6 +139,7 @@ export default function Home() {
           content="Platform for discovering and sharing knowledge documents"
         />
         <meta property="og:type" content="website" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           rel="preconnect"
@@ -324,7 +287,7 @@ export default function Home() {
         </div>
 
         {/* Documents Grid */}
-        <section className="max-w-7xl mx-auto px-2 pb-32">
+        <section className="max-w-7xl mx-auto px-2 pb-8">
           {loading ? (
             <div className="flex flex-wrap gap-6 justify-center">
               {Array.from({ length: 21 }).map((_, i) => (
@@ -332,42 +295,250 @@ export default function Home() {
               ))}
             </div>
           ) : (
-            <>
-              <div className="flex flex-wrap gap-6 justify-center">
-                {documents.map((doc, index) => (
-                  <div
-                    key={doc._id}
-                    ref={
-                      index === documents.length - 1 ? lastDocumentRef : null
-                    }
-                  >
-                    <DocumentCard document={doc} />
-                  </div>
-                ))}
-              </div>
-
-              {loadingMore && (
-                <div className="flex flex-wrap gap-6 justify-center mt-6">
-                  {Array.from({ length: 14 }).map((_, i) => (
-                    <DocumentSkeleton key={i} />
-                  ))}
+            <div className="flex flex-wrap gap-6 justify-center">
+              {documents.map((doc, index) => (
+                <div key={doc._id}>
+                  <DocumentCard document={doc} />
                 </div>
-              )}
+              ))}
+            </div>
+          )}
 
-              {!hasMore && documents.length > 0 && (
-                <div className="text-center py-12">
-                  <p className="text-dark-400">You've reached the end</p>
-                </div>
-              )}
-
-              {documents.length === 0 && !loading && (
-                <div className="text-center py-20">
-                  <p className="text-dark-400 text-lg">No documents found</p>
-                </div>
-              )}
-            </>
+          {documents.length === 0 && !loading && (
+            <div className="text-center py-20">
+              <p className="text-dark-400 text-lg">No documents found</p>
+            </div>
           )}
         </section>
+
+        {/* Explore All Documents Section with Gradient Background */}
+        <section className="relative bg-gradient-to-t from-dark-950 via-dark-950/80 to-transparent -mt-48 pt-20 pb-16">
+          <div className="max-w-7xl mx-auto px-2 text-center">
+            <div className="flex justify-center">
+              <Link
+                href="/explore"
+                className="inline-flex items-center gap-2 px-6 py-3 bg-dark-800/80 backdrop-blur-md rounded-full border border-dark-600 hover:bg-dark-700/80 transition-all duration-300"
+              >
+                <svg
+                  className="w-5 h-5 text-white"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                <span className="text-white font-semibold text-sm">
+                  Explore 1M+ Documents
+                </span>
+                <svg
+                  className="w-5 h-5 ml-2"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 8l4 4m0 0l-4 4m4-4H3"
+                  />
+                </svg>
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* Main tagline */}
+        <section className="py-16 bg-dark-950">
+          <div className="max-w-4xl mx-auto px-6 text-center">
+            <p className="text-sm text-dark-400 uppercase tracking-wider mb-4">
+              IT'S A DOCUMENT REPOSITORY, BUT BETTER
+            </p>
+            <h2
+              className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-white"
+              style={{ fontFamily: "serif" }}
+            >
+              The DocsDB difference
+            </h2>
+            <p className="text-lg text-dark-200 mb-8 leading-relaxed">
+              DocsDB is different because we combine the comprehensive
+              collection of a digital library with the intuitive discovery of
+              modern platforms. Your perfect document is just a few clicks away.
+            </p>
+          </div>
+
+          <div className="max-w-6xl mx-auto px-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <div className="text-center p-6">
+                <div className="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
+                  <svg
+                    className="w-8 h-8 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold mb-4">Advanced Search</h3>
+                <p className="text-dark-300">
+                  Powerful search capabilities with filters, categories, and
+                  AI-powered recommendations.
+                </p>
+              </div>
+
+              <div className="text-center p-6">
+                <div className="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-green-500 to-teal-600 rounded-xl flex items-center justify-center">
+                  <svg
+                    className="w-8 h-8 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+                    />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold mb-4">Verified Content</h3>
+                <p className="text-dark-300">
+                  All documents are verified for quality and authenticity by our
+                  expert team.
+                </p>
+              </div>
+
+              <div className="text-center p-6">
+                <div className="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-orange-500 to-red-600 rounded-xl flex items-center justify-center">
+                  <svg
+                    className="w-8 h-8 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold mb-4">Fast Access</h3>
+                <p className="text-dark-300">
+                  Instant access to millions of documents with our optimized
+                  delivery system.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Footer Section */}
+        <footer className="bg-dark-950 border-t border-dark-800 py-12">
+          <div className="max-w-6xl mx-auto px-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+              <div className="md:col-span-2">
+                <div className="flex items-center justify-start gap-2 mb-4">
+                  <Logo />
+                  <h3 className="text-2xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+                    DocsDB
+                  </h3>
+                </div>
+
+                <p className="text-dark-300 max-w-md">
+                  The premier platform for discovering, sharing, and organizing
+                  knowledge documents. Join our community of researchers,
+                  students, and professionals.
+                </p>
+              </div>
+
+              <div>
+                <h4 className="font-semibold mb-4">Quick Links</h4>
+                <ul className="space-y-2 text-dark-300">
+                  <li>
+                    <Link
+                      href="/explore"
+                      className="hover:text-white transition-colors"
+                    >
+                      Explore Documents
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      href="/upload"
+                      className="hover:text-white transition-colors"
+                    >
+                      Upload Document
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      href="/about"
+                      className="hover:text-white transition-colors"
+                    >
+                      About Us
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      href="/contact"
+                      className="hover:text-white transition-colors"
+                    >
+                      Contact
+                    </Link>
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <h4 className="font-semibold mb-4">Legal</h4>
+                <ul className="space-y-2 text-dark-300">
+                  <li>
+                    <Link
+                      href="/privacy"
+                      className="hover:text-white transition-colors"
+                    >
+                      Privacy Policy
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      href="/terms"
+                      className="hover:text-white transition-colors"
+                    >
+                      Terms of Service
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      href="/copyright"
+                      className="hover:text-white transition-colors"
+                    >
+                      Copyright
+                    </Link>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="border-t border-dark-800 mt-8 pt-8 text-center text-dark-400">
+              <p>&copy; 2025 DocsDB. All rights reserved.</p>
+            </div>
+          </div>
+        </footer>
       </div>
     </>
   );

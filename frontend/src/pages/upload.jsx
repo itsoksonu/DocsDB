@@ -1,33 +1,46 @@
 // src/pages/upload.jsx
-import { useState, useRef } from 'react';
-import Head from 'next/head';
-import { useRouter } from 'next/router';
-import { useAuth } from '../contexts/AuthContext';
-import { DesktopNavbar } from '../components/layout/DesktopNavbar';
-import { Upload, FileText, X, Check, AlertCircle, Loader } from '../icons';
-import { apiService } from '../services/api';
-import toast from 'react-hot-toast';
+import { useState, useRef } from "react";
+import Head from "next/head";
+import { useRouter } from "next/router";
+import { useAuth } from "../contexts/AuthContext";
+import { DesktopNavbar } from "../components/layout/DesktopNavbar";
+import {
+  Upload,
+  FileText,
+  X,
+  Check,
+  AlertCircle,
+  Loader,
+  Search,
+  Users,
+  Code,
+} from "../icons";
+import { apiService } from "../services/api";
+import toast from "react-hot-toast";
 
 export default function UploadPage() {
   const { user } = useAuth();
   const router = useRouter();
   const fileInputRef = useRef(null);
-  
+
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState('idle'); // idle, uploading, processing, processed, error
+  const [uploadStatus, setUploadStatus] = useState("idle"); // idle, uploading, processing, processed, error
   const [documentId, setDocumentId] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState("");
 
   // Supported file types
   const ALLOWED_TYPES = {
-    'application/pdf': '.pdf',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-    'text/csv': '.csv'
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+      ".pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      ".xlsx",
+    "text/csv": ".csv",
   };
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -38,19 +51,21 @@ export default function UploadPage() {
 
     // Validate file type
     if (!Object.keys(ALLOWED_TYPES).includes(file.type)) {
-      toast.error('Invalid file type. Please upload PDF, DOCX, PPTX, XLSX, or CSV files.');
+      toast.error(
+        "Invalid file type. Please upload PDF, DOCX, PPTX, XLSX, or CSV files."
+      );
       return;
     }
 
     // Validate file size
     if (file.size > MAX_FILE_SIZE) {
-      toast.error('File size exceeds 100MB limit.');
+      toast.error("File size exceeds 100MB limit.");
       return;
     }
 
     setSelectedFile(file);
-    setUploadStatus('idle');
-    setErrorMessage('');
+    setUploadStatus("idle");
+    setErrorMessage("");
   };
 
   const handleDrop = (event) => {
@@ -68,10 +83,10 @@ export default function UploadPage() {
 
   const removeFile = () => {
     setSelectedFile(null);
-    setUploadStatus('idle');
-    setErrorMessage('');
+    setUploadStatus("idle");
+    setErrorMessage("");
     if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+      fileInputRef.current.value = "";
     }
   };
 
@@ -79,27 +94,27 @@ export default function UploadPage() {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
 
-      xhr.upload.addEventListener('progress', (event) => {
+      xhr.upload.addEventListener("progress", (event) => {
         if (event.lengthComputable) {
           const progress = Math.round((event.loaded / event.total) * 100);
           setUploadProgress(progress);
         }
       });
 
-      xhr.addEventListener('load', () => {
+      xhr.addEventListener("load", () => {
         if (xhr.status === 200) {
           resolve();
         } else {
-          reject(new Error('Upload failed'));
+          reject(new Error("Upload failed"));
         }
       });
 
-      xhr.addEventListener('error', () => {
-        reject(new Error('Upload failed'));
+      xhr.addEventListener("error", () => {
+        reject(new Error("Upload failed"));
       });
 
-      xhr.open('PUT', presignedUrl);
-      xhr.setRequestHeader('Content-Type', file.type);
+      xhr.open("PUT", presignedUrl);
+      xhr.setRequestHeader("Content-Type", file.type);
       xhr.send(file);
     });
   };
@@ -108,25 +123,25 @@ export default function UploadPage() {
     try {
       const response = await apiService.getUploadStatus(docId);
       const status = response.data.status;
-      
+
       setProcessingStatus(status);
 
-      if (status === 'processed') {
-        setUploadStatus('processed');
-        toast.success('Document processed successfully!');
+      if (status === "processed") {
+        setUploadStatus("processed");
+        toast.success("Document processed successfully!");
         setTimeout(() => {
-          router.push('/');
+          router.push("/");
         }, 2000);
-      } else if (status === 'failed') {
-        setUploadStatus('error');
-        setErrorMessage(response.data.processingError || 'Processing failed');
-        toast.error('Document processing failed');
-      } else if (status === 'processing') {
+      } else if (status === "failed") {
+        setUploadStatus("error");
+        setErrorMessage(response.data.processingError || "Processing failed");
+        toast.error("Document processing failed");
+      } else if (status === "processing") {
         // Keep polling
         setTimeout(() => checkProcessingStatus(docId), 3000);
       }
     } catch (error) {
-      console.error('Error checking status:', error);
+      console.error("Error checking status:", error);
     }
   };
 
@@ -134,16 +149,16 @@ export default function UploadPage() {
     if (!selectedFile || !user) return;
 
     setUploading(true);
-    setUploadStatus('uploading');
+    setUploadStatus("uploading");
     setUploadProgress(0);
-    setErrorMessage('');
+    setErrorMessage("");
 
     try {
       // Step 1: Get presigned URL
       const presignResponse = await apiService.getPresignedUrl({
         fileName: selectedFile.name,
         fileType: selectedFile.type,
-        fileSize: selectedFile.size
+        fileSize: selectedFile.size,
       });
 
       const { uploadUrl, documentId: docId, key } = presignResponse.data;
@@ -151,36 +166,37 @@ export default function UploadPage() {
 
       // Step 2: Upload to S3
       await uploadToS3(uploadUrl, selectedFile);
-      
+
       setUploadProgress(100);
-      toast.success('File uploaded successfully!');
+      toast.success("File uploaded successfully!");
 
       // Step 3: Complete upload and start processing
-      setUploadStatus('processing');
+      setUploadStatus("processing");
       await apiService.completeUpload({
         documentId: docId,
-        key: key
+        key: key,
       });
 
       // Step 4: Poll for processing status
       setTimeout(() => checkProcessingStatus(docId), 2000);
-
     } catch (error) {
-      console.error('Upload error:', error);
-      setUploadStatus('error');
-      setErrorMessage(error.response?.data?.message || 'Upload failed. Please try again.');
-      toast.error(error.response?.data?.message || 'Upload failed');
+      console.error("Upload error:", error);
+      setUploadStatus("error");
+      setErrorMessage(
+        error.response?.data?.message || "Upload failed. Please try again."
+      );
+      toast.error(error.response?.data?.message || "Upload failed");
     } finally {
       setUploading(false);
     }
   };
 
   const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0) return "0 Bytes";
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ["Bytes", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
 
   return (
@@ -191,15 +207,27 @@ export default function UploadPage() {
       </Head>
 
       <div className="min-h-screen bg-dark-950 text-white">
-        <DesktopNavbar onUploadClick={() => {}} />
+        <DesktopNavbar
+          onSearch={(query) => {
+            // Add search functionality for upload page
+            const trimmed = query.trim();
+            if (trimmed && trimmed !== router.query.q) {
+              router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+            }
+          }}
+          onUploadClick={() => {}}
+        />
 
         <div className="pt-32 pb-20 px-6">
           <div className="max-w-3xl mx-auto">
             {/* Header */}
             <div className="text-center mb-12">
-              <h1 className="text-4xl font-bold mb-4">Upload Document</h1>
+              <h1 className="text-4xl font-bold mb-4">
+                Contribute to the Collection
+              </h1>
               <p className="text-dark-300 text-lg">
-                Share your knowledge with the world
+                Someone out there is searching for your document. Share
+                knowledge with a global audience of 90M+ and counting.
               </p>
             </div>
 
@@ -246,12 +274,14 @@ export default function UploadPage() {
                       <FileText size={24} className="text-white" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-medium truncate">{selectedFile.name}</h4>
+                      <h4 className="font-medium truncate">
+                        {selectedFile.name}
+                      </h4>
                       <p className="text-sm text-dark-400">
                         {formatFileSize(selectedFile.size)}
                       </p>
                     </div>
-                    {uploadStatus === 'idle' && (
+                    {uploadStatus === "idle" && (
                       <button
                         onClick={removeFile}
                         className="p-2 hover:bg-dark-700 rounded-lg transition-colors"
@@ -262,31 +292,37 @@ export default function UploadPage() {
                   </div>
 
                   {/* Upload Progress */}
-                  {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
+                  {(uploadStatus === "uploading" ||
+                    uploadStatus === "processing") && (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-dark-300">
-                          {uploadStatus === 'uploading' ? 'Uploading...' : 'Processing...'}
+                          {uploadStatus === "uploading"
+                            ? "Uploading..."
+                            : "Processing..."}
                         </span>
-                        {uploadStatus === 'uploading' && (
-                          <span className="text-dark-400">{uploadProgress}%</span>
+                        {uploadStatus === "uploading" && (
+                          <span className="text-dark-400">
+                            {uploadProgress}%
+                          </span>
                         )}
                       </div>
                       <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
                         <div
                           className={`h-full transition-all duration-300 ${
-                            uploadStatus === 'processing' 
-                              ? 'bg-blue-500 animate-pulse' 
-                              : 'bg-blue-500'
+                            uploadStatus === "processing"
+                              ? "bg-blue-500 animate-pulse"
+                              : "bg-blue-500"
                           }`}
-                          style={{ 
-                            width: uploadStatus === 'uploading' 
-                              ? `${uploadProgress}%` 
-                              : '100%' 
+                          style={{
+                            width:
+                              uploadStatus === "uploading"
+                                ? `${uploadProgress}%`
+                                : "100%",
                           }}
                         />
                       </div>
-                      {uploadStatus === 'processing' && (
+                      {uploadStatus === "processing" && (
                         <div className="flex items-center gap-2 text-sm text-dark-400">
                           <Loader size={16} className="animate-spin" />
                           <span>
@@ -298,22 +334,31 @@ export default function UploadPage() {
                   )}
 
                   {/* Success Status */}
-                  {uploadStatus === 'completed' && (
+                  {uploadStatus === "completed" && (
                     <div className="flex items-center gap-3 p-4 bg-green-900/20 border border-green-700 rounded-xl">
                       <Check size={24} className="text-green-500" />
                       <div>
-                        <p className="font-medium text-green-400">Upload successful!</p>
-                        <p className="text-sm text-dark-400">Redirecting to home...</p>
+                        <p className="font-medium text-green-400">
+                          Upload successful!
+                        </p>
+                        <p className="text-sm text-dark-400">
+                          Redirecting to home...
+                        </p>
                       </div>
                     </div>
                   )}
 
                   {/* Error Status */}
-                  {uploadStatus === 'error' && (
+                  {uploadStatus === "error" && (
                     <div className="flex items-start gap-3 p-4 bg-red-900/20 border border-red-700 rounded-xl">
-                      <AlertCircle size={24} className="text-red-500 flex-shrink-0 mt-0.5" />
+                      <AlertCircle
+                        size={24}
+                        className="text-red-500 flex-shrink-0 mt-0.5"
+                      />
                       <div>
-                        <p className="font-medium text-red-400">Upload failed</p>
+                        <p className="font-medium text-red-400">
+                          Upload failed
+                        </p>
                         <p className="text-sm text-dark-400">{errorMessage}</p>
                       </div>
                     </div>
@@ -321,7 +366,7 @@ export default function UploadPage() {
 
                   {/* Action Buttons */}
                   <div className="flex gap-3">
-                    {uploadStatus === 'idle' && (
+                    {uploadStatus === "idle" && (
                       <>
                         <button
                           onClick={handleUpload}
@@ -338,7 +383,7 @@ export default function UploadPage() {
                         </button>
                       </>
                     )}
-                    {uploadStatus === 'error' && (
+                    {uploadStatus === "error" && (
                       <>
                         <button
                           onClick={handleUpload}
@@ -359,15 +404,83 @@ export default function UploadPage() {
               )}
             </div>
 
-            {/* Info Section */}
-            <div className="mt-8 p-6 bg-dark-900/50 border border-dark-700 rounded-xl">
-              <h3 className="font-semibold mb-3">Upload Guidelines</h3>
-              <ul className="space-y-2 text-sm text-dark-400">
-                <li>• Supported formats: PDF, DOCX, PPTX, XLSX, CSV</li>
-                <li>• Maximum file size: 100MB</li>
-                <li>• Your document will be processed automatically</li>
-                <li>• Processing time depends on file size and complexity</li>
-              </ul>
+            {/* Terms Agreement */}
+            <p className="mt-4 text-center text-sm text-dark-400">
+              By uploading, you agree to our{" "}
+              <a
+                href="/terms"
+                className="text-blue-500 hover:text-blue-400 underline"
+              >
+                DocsDB Upload Terms and Agreement
+              </a>
+              .
+            </p>
+
+            {/* Copyright Notice */}
+            <div className="mt-8 p-6 bg-yellow-900/10 border border-yellow-700/30 rounded-xl">
+              <p className="text-sm text-dark-300 leading-relaxed">
+                <strong className="text-yellow-500">Important:</strong> We take
+                intellectual property rights very seriously. DocsDB is fully
+                compliant with the DMCA and all applicable laws. If you did not
+                create a work yourself and are unsure whether it is copyrighted,
+                please do not upload it. DocsDB expeditiously removes infringing
+                material and terminates repeat infringers pursuant to our
+                "three-strikes" policy.
+              </p>
+            </div>
+
+            {/* Benefits Section */}
+            <div className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="p-6 bg-dark-900/50 border border-dark-700 rounded-xl">
+                <div className="w-12 h-12 bg-blue-600/20 rounded-lg flex items-center justify-center mb-4">
+                  <Upload size={24} className="text-blue-500" />
+                </div>
+                <h3 className="font-semibold mb-2">
+                  Upload documents easily, for free
+                </h3>
+                <p className="text-sm text-dark-400">
+                  Simple drag-and-drop interface with support for multiple file
+                  formats
+                </p>
+              </div>
+
+              <div className="p-6 bg-dark-900/50 border border-dark-700 rounded-xl">
+                <div className="w-12 h-12 bg-green-600/20 rounded-lg flex items-center justify-center mb-4">
+                  <Search size={24} className="text-green-500" />
+                </div>
+                <h3 className="font-semibold mb-2">
+                  Amplify reach with search engine indexing
+                </h3>
+                <p className="text-sm text-dark-400">
+                  Your documents get indexed and discovered by search engines
+                  worldwide
+                </p>
+              </div>
+
+              <div className="p-6 bg-dark-900/50 border border-dark-700 rounded-xl">
+                <div className="w-12 h-12 bg-purple-600/20 rounded-lg flex items-center justify-center mb-4">
+                  <Users size={24} className="text-purple-500" />
+                </div>
+                <h3 className="font-semibold mb-2">
+                  Share with 90M+ people around the world
+                </h3>
+                <p className="text-sm text-dark-400">
+                  Connect with a massive global audience actively seeking
+                  knowledge
+                </p>
+              </div>
+
+              <div className="p-6 bg-dark-900/50 border border-dark-700 rounded-xl">
+                <div className="w-12 h-12 bg-orange-600/20 rounded-lg flex items-center justify-center mb-4">
+                  <Code size={24} className="text-orange-500" />
+                </div>
+                <h3 className="font-semibold mb-2">
+                  Embed content directly on your website
+                </h3>
+                <p className="text-sm text-dark-400">
+                  Easy embed codes to showcase your documents anywhere online
+                </p>
+              </div>
             </div>
           </div>
         </div>

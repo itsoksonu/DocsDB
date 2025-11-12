@@ -1,20 +1,11 @@
 // src/components/layout/DesktopNavbar.jsx
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { useAuth } from "../../contexts/AuthContext";
-import { useModal } from "../../hooks/useModal";
 import { Dropdown, DropdownItem } from "../ui/Dropdown";
 import { SearchBar } from "../ui/SearchBar";
-import {
-  Upload,
-  User,
-  Menu,
-  LogOut,
-  FileText,
-  Settings,
-  Sparkles,
-  Logo
-} from "../../icons";
+import { Upload, User, LogOut, HelpCircle, Flag, Bookmark } from "../../icons";
 import toast from "react-hot-toast";
 import { useGoogleAuth } from "../../hooks/useGoogleAuth";
 
@@ -24,7 +15,7 @@ export const DesktopNavbar = ({
   onUploadClick,
 }) => {
   const { user, logout, handleGoogleOAuth } = useAuth();
-  const { openModal } = useModal();
+  const router = useRouter();
   const {
     isGoogleLoaded,
     initializeGoogleOneTap,
@@ -35,6 +26,7 @@ export const DesktopNavbar = ({
   const [showNavSearch, setShowNavSearch] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
+  const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState(false);
 
   useEffect(() => {
     // Check if screen is desktop size
@@ -66,9 +58,21 @@ export const DesktopNavbar = ({
     return () => window.removeEventListener("scroll", handleScroll);
   }, [isDesktop]);
 
+  // Default search handler
+  const defaultSearchHandler = (query) => {
+    const trimmed = query.trim();
+    if (trimmed && trimmed !== router.query.q) {
+      router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+    }
+  };
+
+  // Use provided onSearch or default handler
+  const handleSearch = onSearch || defaultSearchHandler;
+
   const handleLogout = async () => {
     try {
       await logout();
+      router.push("/");
     } catch (error) {
       console.error("Logout failed:", error);
     }
@@ -123,6 +127,39 @@ export const DesktopNavbar = ({
     }
   };
 
+  const navigateToProfile = () => {
+    router.push("/profile");
+    setIsProfileDropdownOpen(false);
+  };
+
+  const navigateToSavedDocs = () => {
+    router.push("/profile/saved");
+    setIsProfileDropdownOpen(false);
+  };
+
+  const navigateToUploadedDocs = () => {
+    router.push("/profile/uploaded");
+    setIsProfileDropdownOpen(false);
+  };
+
+  const navigateToHelpCenter = () => {
+    router.push("/help");
+    setIsProfileDropdownOpen(false);
+  };
+
+  const navigateToReport = () => {
+    router.push("/report");
+    setIsProfileDropdownOpen(false);
+  };
+
+  const handleProfileDropdownToggle = () => {
+    setIsProfileDropdownOpen(!isProfileDropdownOpen);
+  };
+
+  const handleProfileDropdownClose = () => {
+    setIsProfileDropdownOpen(false);
+  };
+
   return (
     <nav
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
@@ -135,19 +172,37 @@ export const DesktopNavbar = ({
         <div className="flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
-            <svg width="40" height="40" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="128" cy="128" r="88" stroke="white" strokeWidth="20" fill="none"/>
-              <line x1="88" y1="168" x2="168" y2="88" stroke="white" strokeWidth="20" strokeLinecap="round"/>
+            <svg
+              width="40"
+              height="40"
+              viewBox="0 0 256 256"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <circle
+                cx="128"
+                cy="128"
+                r="88"
+                stroke="white"
+                strokeWidth="20"
+                fill="none"
+              />
+              <line
+                x1="88"
+                y1="168"
+                x2="168"
+                y2="88"
+                stroke="white"
+                strokeWidth="20"
+                strokeLinecap="round"
+              />
             </svg>
-            <span className="text-xl text-white font-bold">
-              DocsDB
-            </span>
+            <span className="text-xl text-white font-bold">DocsDB</span>
           </Link>
 
           {/* Search Bar - Only shown on desktop when scrolled past hero search */}
           {showNavSearch && (
             <div className="hidden md:flex flex-1 max-w-2xl mx-8 animate-fadeIn">
-              <SearchBar onSearch={onSearch} />
+              <SearchBar onSearch={handleSearch} />
             </div>
           )}
 
@@ -159,14 +214,17 @@ export const DesktopNavbar = ({
               className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-dark-200 text-black rounded-xl transition-all duration-200 font-medium"
             >
               <Upload size={18} />
-              <span className="hidden sm:inline">Upload</span>
+              <span className="inline">Upload</span>
             </button>
 
-            {/* Profile Dropdown or Sign In Button */}
+            {/* Profile Picture with Dropdown */}
             {user ? (
               <Dropdown
                 trigger={
-                  <button className="flex items-center gap-2 p-2 hover:bg-dark-800 rounded-full transition-all duration-200">
+                  <button
+                    onClick={handleProfileDropdownToggle}
+                    className="flex items-center gap-2 p-1 hover:bg-dark-800 rounded-full border border-dark-700 transition-all duration-200"
+                  >
                     {user.avatar ? (
                       <img
                         src={user.avatar}
@@ -181,28 +239,64 @@ export const DesktopNavbar = ({
                     )}
                   </button>
                 }
+                align="right"
+                isOpen={isProfileDropdownOpen}
+                onClose={handleProfileDropdownClose}
               >
+                {/* User Info Section */}
+                <div className="px-4 py-3 border-b border-dark-600">
+                  <div className="text-white font-semibold truncate max-w-[200px]">
+                    {user.name}
+                  </div>
+                  <div className="text-dark-300 text-sm truncate max-w-[200px]">
+                    {user.email}
+                  </div>
+                </div>
+
+                {/* Profile Section */}
                 <DropdownItem
-                  onClick={() => openModal("profile_modal")}
+                  onClick={navigateToProfile}
                   icon={User}
-                >
-                  Profile
-                </DropdownItem>
-                <DropdownItem icon={FileText}>My Documents</DropdownItem>
+                  label="Profile"
+                  className="mt-2"
+                />
                 <DropdownItem
-                  onClick={() => openModal("settings_modal")}
-                  icon={Settings}
-                >
-                  Settings
-                </DropdownItem>
-                <div className="h-px bg-dark-600 my-1" />
+                  icon={Bookmark}
+                  label="Saved Docs"
+                  onClick={navigateToSavedDocs}
+                />
                 <DropdownItem
-                  onClick={handleLogout}
+                  icon={Upload}
+                  label="Uploaded Docs"
+                  onClick={navigateToUploadedDocs}
+                />
+
+                <div className="h-px bg-dark-600 my-2" />
+
+                {/* Support Section */}
+                <DropdownItem
+                  icon={HelpCircle}
+                  label="Help Center"
+                  onClick={navigateToHelpCenter}
+                />
+                <DropdownItem
+                  icon={Flag}
+                  label="Report"
+                  onClick={navigateToReport}
+                />
+
+                <div className="h-px bg-dark-600 my-2" />
+
+                {/* Logout */}
+                <DropdownItem
+                  onClick={() => {
+                    handleLogout();
+                    handleProfileDropdownClose();
+                  }}
                   icon={LogOut}
-                  className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
-                >
-                  Sign Out
-                </DropdownItem>
+                  label="Logout"
+                  className="text-red-400 hover:text-red-300 hover:bg-red-900/20 mb-2"
+                />
               </Dropdown>
             ) : (
               <button
@@ -215,24 +309,6 @@ export const DesktopNavbar = ({
                 {signingIn ? "Signing in..." : "Sign In"}
               </button>
             )}
-
-            {/* Hamburger Menu for Additional Options */}
-            <Dropdown
-              trigger={
-                <button className="p-2.5 hover:bg-dark-800 rounded-full transition-all duration-200 border border-dark-600">
-                  <Menu size={20} className="text-dark-300" />
-                </button>
-              }
-            >
-              <DropdownItem icon={FileText}>Categories</DropdownItem>
-              <DropdownItem icon={Sparkles}>Trending</DropdownItem>
-              <DropdownItem
-                onClick={() => openModal("settings_modal")}
-                icon={Settings}
-              >
-                Preferences
-              </DropdownItem>
-            </Dropdown>
           </div>
         </div>
       </div>

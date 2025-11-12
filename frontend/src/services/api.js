@@ -16,6 +16,7 @@ class APIService {
     this.setupInterceptors();
     this.retryCount = 0;
     this.maxRetries = 3;
+    this.searchCache = new Map();
   }
 
   setupInterceptors() {
@@ -78,7 +79,7 @@ class APIService {
 
   // OAuth login - Only method for authentication
   async oauthLogin(oauthData) {
-    const response = await this.client.post('/oauth', oauthData);
+    const response = await this.client.post("/oauth", oauthData);
     return response.data;
   }
 
@@ -94,12 +95,12 @@ class APIService {
   }
 
   async refreshToken() {
-    const response = await this.client.post('/auth/refresh');
+    const response = await this.client.post("/auth/refresh");
     return response;
   }
 
   async getOAuthProviders() {
-    const response = await this.client.get('/oauth/providers');
+    const response = await this.client.get("/oauth/providers");
     return response.data;
   }
 
@@ -132,10 +133,16 @@ class APIService {
     return response.data;
   }
 
-  async searchDocuments(queryParams) {
-    const response = await this.client.get("/feed/search", {
-      params: queryParams,
-    });
+  async searchDocuments(params) {
+    const key = JSON.stringify(params);
+    if (this.searchCache.has(key)) return this.searchCache.get(key);
+    const response = await this.client.get("/feed/search", { params });
+    this.searchCache.set(key, response.data);
+    
+    if (this.searchCache.size > 50) {
+      const firstKey = this.searchCache.keys().next().value;
+      this.searchCache.delete(firstKey);
+    }
     return response.data;
   }
 

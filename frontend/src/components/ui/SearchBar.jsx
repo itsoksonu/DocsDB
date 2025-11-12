@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Search, X } from '../../icons';
+import debounce from "lodash.debounce";
 
 export const SearchBar = ({ 
   onSearch, 
@@ -13,14 +14,15 @@ export const SearchBar = ({
   const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
-    const delayDebounceFn = setTimeout(() => {
-      if (query.length >= 2 || query.length === 0) {
-        onSearch(query);
-      }
-    }, 300);
+  const debouncedSearch = debounce((val) => {
+    if (val.length >= 2 || val.length === 0) {
+      onSearch(val);
+    }
+  }, 600);
 
-    return () => clearTimeout(delayDebounceFn);
-  }, [query, onSearch]);
+  debouncedSearch(query);
+  return () => debouncedSearch.cancel();
+}, [query]);
 
   const clearSearch = () => {
     setQuery('');

@@ -23,7 +23,7 @@ export const AuthProvider = ({ children }) => {
     // Set up token refresh interval
     const interval = setInterval(() => {
       refreshTokenSilently();
-    }, 14 * 60 * 1000); // Refresh every 14 minutes
+    }, 25 * 60 * 1000); // Refresh every 25 minutes
 
     return () => clearInterval(interval);
   }, []);
@@ -49,11 +49,11 @@ export const AuthProvider = ({ children }) => {
     setRefreshing(true);
     try {
       const response = await apiService.refreshToken();
-      localStorage.setItem("accessToken", response.data.data.accessToken);  // Correct: axios response structure
+      localStorage.setItem("accessToken", response.data.accessToken); 
 
       // Update user data
       const userResponse = await apiService.getCurrentUser();
-      setUser(userResponse.data.user);  // Fixed: userResponse.data.user
+      setUser(userresponse.data.user);
     } catch (error) {
       // Refresh failed, logout user
       await logout();
@@ -64,8 +64,8 @@ export const AuthProvider = ({ children }) => {
 
   const oauthLogin = async (oauthData) => {
     const response = await apiService.oauthLogin(oauthData);
-    localStorage.setItem("accessToken", response.data.accessToken);  // Fixed: response.data.accessToken
-    setUser(response.data.user);  // Fixed: response.data.user
+    localStorage.setItem("accessToken", response.data.accessToken);
+    setUser(response.data.user);
     return response;
   };
 
@@ -91,8 +91,8 @@ export const AuthProvider = ({ children }) => {
       };
 
       const response = await apiService.oauthLogin(oauthData);
-      localStorage.setItem("accessToken", response.data.accessToken);  // Fixed: response.data.accessToken (centralized here)
-      setUser(response.data.user);  // Fixed: response.data.user
+      localStorage.setItem("accessToken", response.data.accessToken);
+      setUser(response.data.user);
 
       return response;
     } catch (error) {

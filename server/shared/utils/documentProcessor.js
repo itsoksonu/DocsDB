@@ -954,11 +954,23 @@ async function generateWithGemini(content, filename) {
   "title": "concise title under 80 chars",
   "description": "1-2 sentence description", 
   "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
-  "category": "any one from these" - ["technology","business","education","health","entertainment","sports","finance-money-management","games-activities","comics","philosophy","career-growth","politics","biography-memoir","study-aids-test-prep","law","art","science","history","erotica","lifestyle","religion-spirituality","self-improvement","language-arts","cooking-food-wine","true-crime","sheet-music","fiction","non-fiction","science-fiction","fantasy","romance","thriller-suspense","horror","poetry","graphic-novels","young-adult","children","parenting-family","marketing-sales","psychology","social-sciences","engineering","mathematics","nature-environment","travel","reference","design", "news-media", "professional-development", "other"]
+  "category": "only choose ONE strictly from this list — do not invent new ones:
+  ["for-you","technology","business","education","health","entertainment","sports",
+  "finance-money-management","games-activities","comics","philosophy","career-growth",
+  "politics","biography-memoir","study-aids-test-prep","law","art","science","history",
+  "erotica","lifestyle","religion-spirituality","self-improvement","language-arts",
+  "cooking-food-wine","true-crime","sheet-music","fiction","non-fiction",
+  "science-fiction","fantasy","romance","thriller-suspense","horror","poetry",
+  "graphic-novels","young-adult","children","parenting-family","marketing-sales",
+  "psychology","social-sciences","engineering","mathematics","data-science",
+  "nature-environment","travel","reference","design","news-media",
+  "professional-development","other"]
 }
 
 Document: ${filename}
-Content: ${truncatedContent}`;
+Content: ${truncatedContent}
+
+Return only valid JSON and do not generate new categories like 'computer-science'.`;
 
   try {
     const response = await geminiAI.models.generateContent({

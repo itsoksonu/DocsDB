@@ -3,6 +3,8 @@ export {
   Search,
   Upload,
   User,
+  Users,
+  Code,
   Menu,
   X,
   Home,
@@ -23,7 +25,14 @@ export {
   Check,
   AlertCircle,
   Loader2,
-  Sparkles
+  Sparkles,
+  Flag,
+  CloudUpload,
+  Bookmark,
+  HelpCircle,
+  Share2,
+  EyeOff,
+  MoreVertical
 } from 'lucide-react';
 
 export { FaGoogle, FaFacebook, FaGithub } from "react-icons/fa";
@@ -51,9 +60,9 @@ export const Loader = ({ size = 24, className = "" }) => (
   </svg>
 );
 
-export const Logo = ({size = 40, className = ""}) => {
-  <svg width="40" height="40" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="128" cy="128" r="88" stroke="white" strokeWidth="20" fill="none"/>
-    <line x1="88" y1="168" x2="168" y2="88" stroke="white" strokeWidth="20" strokeLinecap="round"/>
+export const Logo = ({size = 40, className = ""}) => (
+  <svg width={size} height={size} viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="128" cy="128" r="88" stroke="currentColor" strokeWidth="20" fill="none"/>
+    <line x1="88" y1="168" x2="168" y2="88" stroke="currentColor" strokeWidth="20" strokeLinecap="round"/>
   </svg>
-}
+);

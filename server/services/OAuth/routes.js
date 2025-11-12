@@ -114,14 +114,9 @@ router.post(
       res.cookie("refreshToken", refreshTokenJWT, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        sameSite: "lax",
         maxAge: 30 * 24 * 60 * 60 * 1000,
       });
-
-      console.log(user.avatar);
-      console.log(user.email);      
-      console.log("........................................................");      
-
 
       res.json({
         success: true,
