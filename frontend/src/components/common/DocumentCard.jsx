@@ -1,5 +1,6 @@
-// src/components/common/DocumentCard.jsx
-import { useState } from 'react';
+// DocumentCard.jsx - Updated with navigation
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { 
   FileText, 
   Eye, 
@@ -10,16 +11,123 @@ import {
   Sparkles,
   EyeOff,
   Flag,
-  Share2
+  Share2,
+  BookmarkCheck
 } from '../../icons';
 import { Dropdown, DropdownItem } from '../ui/Dropdown';
+import { apiService } from '../../services/api';
+import toast from 'react-hot-toast';
 
 export const DocumentCard = ({ document }) => {
+  const router = useRouter();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasCheckedStatus, setHasCheckedStatus] = useState(false);
+
+  // Check save status only when dropdown is opened
+  useEffect(() => {
+    if (isDropdownOpen && !hasCheckedStatus) {
+      checkSavedStatus();
+    }
+  }, [isDropdownOpen, hasCheckedStatus]);
+
+  const checkSavedStatus = async () => {
+    try {
+      const response = await apiService.checkSavedStatus(document._id);
+      setIsSaved(response.data.isSaved);
+      setHasCheckedStatus(true);
+    } catch (error) {
+      console.error('Error checking save status:', error);
+    }
+  };
+
+  const handleCardClick = (e) => {
+    // Don't navigate if clicking on dropdown or its trigger
+    if (e.target.closest('.dropdown-trigger') || e.target.closest('.dropdown-menu')) {
+      return;
+    }
+    router.push(`/document/${document._id}`);
+  };
+
+  const handleSaveToggle = async (e) => {
+    e.stopPropagation();
+    
+    // Check if user is logged in
+    const token = localStorage.getItem("accessToken");
+    if (!token) {
+      toast.error("Please login to save documents");
+      setIsDropdownOpen(false);
+      return;
+    }
+
+    if (isSaving) return;
+
+    setIsSaving(true);
+    try {
+      if (isSaved) {
+        await apiService.unsaveDocument(document._id);
+        setIsSaved(false);
+        toast.success("Document removed from saved");
+      } else {
+        await apiService.saveDocument(document._id);
+        setIsSaved(true);
+        toast.success("Document saved");
+      }
+    } catch (error) {
+      console.error('Error toggling save:', error);
+      toast.error("Failed to update save status");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    setIsDropdownOpen(false);
+    
+    try {
+      const response = await apiService.client.get(`/documents/${document._id}/view`);
+      const viewUrl = response.data.data.viewUrl;
+      window.open(viewUrl, '_blank');
+      toast.success('Download started');
+    } catch (error) {
+      console.error('Error downloading:', error);
+      toast.error('Failed to download document');
+    }
+  };
+
+  const handleShare = async (e) => {
+    e.stopPropagation();
+    setIsDropdownOpen(false);
+    
+    const shareUrl = `${window.location.origin}/document/${document._id}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: document.generatedTitle,
+          text: document.generatedDescription,
+          url: shareUrl,
+        });
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          navigator.clipboard.writeText(shareUrl);
+          toast.success('Link copied to clipboard');
+        }
+      }
+    } else {
+      navigator.clipboard.writeText(shareUrl);
+      toast.success('Link copied to clipboard');
+    }
+  };
 
   return (
-    <div className="group bg-dark-800 rounded-xl p-3 border border-dark-600 hover:border-dark-400 transition-all duration-300 cursor-pointer w-36 h-[17rem]">
+    <div 
+      onClick={handleCardClick}
+      className="group bg-dark-800 rounded-xl p-3 border border-dark-600 hover:border-dark-400 transition-all duration-300 cursor-pointer w-36 h-[17rem]"
+    >
       <div className="flex flex-col gap-2 h-full">
         {/* Thumbnail */}
         <div className="relative w-full h-40 flex-shrink-0 overflow-hidden rounded-lg bg-dark-700">
@@ -78,79 +186,72 @@ export const DocumentCard = ({ document }) => {
               </div>
 
               {/* More Options */}
-              <Dropdown
-                trigger={
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsDropdownOpen(!isDropdownOpen);
-                    }}
-                    className="p-1 hover:bg-dark-700 rounded transition-colors"
-                  >
-                    <MoreVertical size={14} className="text-dark-400 hover:text-white" />
-                  </button>
-                }
-                isOpen={isDropdownOpen}
-                onClose={() => setIsDropdownOpen(false)}
-                align="right"
-              >
-                <DropdownItem 
-                  icon={Bookmark} 
-                  label="Save for later" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsDropdownOpen(false);
-                    // Handle save
-                  }}
-                />
-                <DropdownItem 
-                  icon={Download} 
-                  label="Download" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsDropdownOpen(false);
-                    // Handle download
-                  }}
-                />
-                <DropdownItem 
-                  icon={Share2} 
-                  label="Share" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsDropdownOpen(false);
-                    // Handle share
-                  }}
-                />
-                <DropdownItem 
-                  icon={Sparkles} 
-                  label="Show more like this" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsDropdownOpen(false);
-                    // Handle show more
-                  }}
-                />
-                <div className="border-t border-dark-600" />
-                <DropdownItem 
-                  icon={EyeOff} 
-                  label="Don't show again" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsDropdownOpen(false);
-                    // Handle hide
-                  }}
-                />
-                <DropdownItem 
-                  icon={Flag} 
-                  label="Report" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsDropdownOpen(false);
-                    // Handle report
-                  }}
-                  className="text-red-400 hover:text-red-300"
-                />
-              </Dropdown>
+              <div className="dropdown-trigger">
+                <Dropdown
+                  trigger={
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsDropdownOpen(!isDropdownOpen);
+                      }}
+                      className="p-1 hover:bg-dark-700 rounded transition-colors"
+                    >
+                      <MoreVertical size={14} className="text-dark-400 hover:text-white" />
+                    </button>
+                  }
+                  isOpen={isDropdownOpen}
+                  onClose={() => setIsDropdownOpen(false)}
+                  align="right"
+                >
+                  <div className="dropdown-menu">
+                    <DropdownItem 
+                      icon={isSaved ? BookmarkCheck : Bookmark}
+                      label={isSaved ? "Remove from saved" : "Save for later"}
+                      onClick={handleSaveToggle}
+                      disabled={isSaving}
+                    />
+                    <DropdownItem 
+                      icon={Download} 
+                      label="Download" 
+                      onClick={handleDownload}
+                    />
+                    <DropdownItem 
+                      icon={Share2} 
+                      label="Share" 
+                      onClick={handleShare}
+                    />
+                    <DropdownItem 
+                      icon={Sparkles} 
+                      label="Show more like this" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsDropdownOpen(false);
+                        router.push(`/?category=${document.category}`);
+                      }}
+                    />
+                    <div className="border-t border-dark-600" />
+                    <DropdownItem 
+                      icon={EyeOff} 
+                      label="Don't show again" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsDropdownOpen(false);
+                        toast.info('Document hidden');
+                      }}
+                    />
+                    <DropdownItem 
+                      icon={Flag} 
+                      label="Report" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsDropdownOpen(false);
+                        toast.info('Report submitted');
+                      }}
+                      className="text-red-400 hover:text-red-300"
+                    />
+                  </div>
+                </Dropdown>
+              </div>
             </div>
           </div>
         </div>

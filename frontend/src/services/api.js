@@ -96,7 +96,7 @@ class APIService {
 
   async refreshToken() {
     const response = await this.client.post("/auth/refresh");
-    return response;
+    return response.data;
   }
 
   async getOAuthProviders() {
@@ -138,7 +138,7 @@ class APIService {
     if (this.searchCache.has(key)) return this.searchCache.get(key);
     const response = await this.client.get("/feed/search", { params });
     this.searchCache.set(key, response.data);
-    
+
     if (this.searchCache.size > 50) {
       const firstKey = this.searchCache.keys().next().value;
       this.searchCache.delete(firstKey);
@@ -164,6 +164,37 @@ class APIService {
     });
     return response.data;
   }
+
+  // Save document
+  async saveDocument(documentId) {
+    const response = await this.client.post(`/documents/${documentId}/save`);
+    return response.data;
+  }
+
+  // Unsave document
+  async unsaveDocument(documentId) {
+    const response = await this.client.delete(`/documents/${documentId}/save`);
+    return response.data;
+  }
+
+  // Get saved documents
+  async getSavedDocuments(params = {}) {
+    const response = await this.client.get("/documents/user/saved-documents", { params });
+    return response.data;
+  }
+
+  // Check if document is saved
+  async checkSavedStatus(documentId) {
+    const response = await this.client.get(
+      `/documents/${documentId}/save/status`
+    );
+    return response.data;
+  }
+
+  async getUserDocuments(params = {}) {
+  const response = await this.client.get("/documents/user/my-documents", { params });
+  return response.data;
+}
 }
 
 export const apiService = new APIService();

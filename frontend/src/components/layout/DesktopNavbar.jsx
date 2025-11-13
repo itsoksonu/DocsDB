@@ -133,12 +133,12 @@ export const DesktopNavbar = ({
   };
 
   const navigateToSavedDocs = () => {
-    router.push("/profile/saved");
+    router.push("/profile?tab=saved");
     setIsProfileDropdownOpen(false);
   };
 
   const navigateToUploadedDocs = () => {
-    router.push("/profile/uploaded");
+    router.push("/profile?tab=uploaded");
     setIsProfileDropdownOpen(false);
   };
 

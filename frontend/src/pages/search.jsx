@@ -10,6 +10,7 @@ import { DocumentSkeleton } from "../components/ui/Skeleton";
 import { apiService } from "../services/api";
 import toast from "react-hot-toast";
 import debounce from "lodash.debounce";
+import Footer from "../components/layout/Footer";
 
 export default function SearchPage() {
   const { user } = useAuth();
@@ -339,6 +340,8 @@ export default function SearchPage() {
           )}
         </section>
       </div>
+         {/* Footer Section */}
+        <Footer />
     </>
   );
 }

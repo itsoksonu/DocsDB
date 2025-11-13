@@ -9,6 +9,7 @@ import { DocumentSkeleton } from "../components/ui/Skeleton";
 import { apiService } from "../services/api";
 import toast from "react-hot-toast";
 import Link from "next/link";
+import Footer from "../components/layout/Footer";
 
 export default function Explore() {
   const router = useRouter();
@@ -215,6 +216,8 @@ export default function Explore() {
           )}
         </section>
       </div>
+         {/* Footer Section */}
+        <Footer />
     </>
   );
 }

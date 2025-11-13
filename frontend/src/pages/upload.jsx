@@ -16,6 +16,7 @@ import {
   Code,
 } from "../icons";
 import { apiService } from "../services/api";
+import Footer from "../components/layout/Footer";
 import toast from "react-hot-toast";
 
 export default function UploadPage() {
@@ -485,6 +486,8 @@ export default function UploadPage() {
           </div>
         </div>
       </div>
+         {/* Footer Section */}
+        <Footer />
     </>
   );
 }

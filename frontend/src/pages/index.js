@@ -11,7 +11,7 @@ import { DocumentSkeleton } from "../components/ui/Skeleton";
 import { apiService } from "../services/api";
 import toast from "react-hot-toast";
 import Link from "next/link";
-import { Logo } from "../icons";
+import Footer from "../components/layout/Footer";
 
 export default function Home() {
   const { user } = useAuth();
@@ -368,7 +368,7 @@ export default function Home() {
             <p className="text-lg text-dark-200 mb-8 leading-relaxed">
               DocsDB is different because we combine the comprehensive
               collection of a digital library with the intuitive discovery of
-              modern platforms. Your perfect document is just a few clicks away.
+              modern platforms. Your required document is just a few clicks away.
             </p>
           </div>
 
@@ -447,98 +447,7 @@ export default function Home() {
         </section>
 
         {/* Footer Section */}
-        <footer className="bg-dark-950 border-t border-dark-800 py-12">
-          <div className="max-w-6xl mx-auto px-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-              <div className="md:col-span-2">
-                <div className="flex items-center justify-start gap-2 mb-4">
-                  <Logo />
-                  <h3 className="text-2xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
-                    DocsDB
-                  </h3>
-                </div>
-
-                <p className="text-dark-300 max-w-md">
-                  The premier platform for discovering, sharing, and organizing
-                  knowledge documents. Join our community of researchers,
-                  students, and professionals.
-                </p>
-              </div>
-
-              <div>
-                <h4 className="font-semibold mb-4">Quick Links</h4>
-                <ul className="space-y-2 text-dark-300">
-                  <li>
-                    <Link
-                      href="/explore"
-                      className="hover:text-white transition-colors"
-                    >
-                      Explore Documents
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/upload"
-                      className="hover:text-white transition-colors"
-                    >
-                      Upload Document
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/about"
-                      className="hover:text-white transition-colors"
-                    >
-                      About Us
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/contact"
-                      className="hover:text-white transition-colors"
-                    >
-                      Contact
-                    </Link>
-                  </li>
-                </ul>
-              </div>
-
-              <div>
-                <h4 className="font-semibold mb-4">Legal</h4>
-                <ul className="space-y-2 text-dark-300">
-                  <li>
-                    <Link
-                      href="/privacy"
-                      className="hover:text-white transition-colors"
-                    >
-                      Privacy Policy
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/terms"
-                      className="hover:text-white transition-colors"
-                    >
-                      Terms of Service
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/copyright"
-                      className="hover:text-white transition-colors"
-                    >
-                      Copyright
-                    </Link>
-                  </li>
-                </ul>
-              </div>
-            </div>
-
-            <div className="border-t border-dark-800 mt-8 pt-8 text-center text-dark-400">
-              <p>&copy; 2025 DocsDB. All rights reserved.</p>
-            </div>
-          </div>
-        </footer>
+        <Footer />
       </div>
     </>
   );

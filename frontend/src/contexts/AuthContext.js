@@ -33,7 +33,7 @@ export const AuthProvider = ({ children }) => {
       const token = localStorage.getItem("accessToken");
       if (token) {
         const response = await apiService.getCurrentUser();
-        setUser(response.data.user);  // Fixed: response.data.user (getCurrentUser returns {success, data: {user}})
+        setUser(response.data.user); // Fixed: response.data.user (getCurrentUser returns {success, data: {user}})
       }
     } catch (error) {
       // Token might be expired, try to refresh
@@ -49,13 +49,11 @@ export const AuthProvider = ({ children }) => {
     setRefreshing(true);
     try {
       const response = await apiService.refreshToken();
-      localStorage.setItem("accessToken", response.data.accessToken); 
+      localStorage.setItem("accessToken", response.data.data.accessToken);
 
-      // Update user data
       const userResponse = await apiService.getCurrentUser();
-      setUser(userresponse.data.user);
+      setUser(userResponse.data.data.user);
     } catch (error) {
-      // Refresh failed, logout user
       await logout();
     } finally {
       setRefreshing(false);

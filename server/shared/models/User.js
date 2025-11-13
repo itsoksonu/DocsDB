@@ -64,7 +64,18 @@ const userSchema = new mongoose.Schema({
   },
   statusReason: String,
   suspendedUntil: Date,
-  avatar: String, // For OAuth profile pictures
+  avatar: String,
+  savedDocuments: [{
+    documentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Document',
+      required: true
+    },
+    savedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
 }, {
   timestamps: true,
   toJSON: {
@@ -79,6 +90,7 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ createdAt: -1 });
 userSchema.index({ kycStatus: 1 });
 userSchema.index({ 'authProviders.provider': 1, 'authProviders.providerId': 1 });
+userSchema.index({ 'savedDocuments.documentId': 1 });
 
 // Method to add OAuth provider
 userSchema.methods.addAuthProvider = async function(providerData) {
@@ -106,6 +118,31 @@ userSchema.statics.findByOAuthProvider = function(provider, providerId) {
     'authProviders.provider': provider,
     'authProviders.providerId': providerId
   });
+};
+
+// Method to check if document is saved
+userSchema.methods.hasSavedDocument = function(documentId) {
+  return this.savedDocuments.some(
+    savedDoc => savedDoc.documentId.toString() === documentId.toString()
+  );
+};
+
+// Method to save a document
+userSchema.methods.saveDocument = async function(documentId) {
+  if (!this.hasSavedDocument(documentId)) {
+    this.savedDocuments.push({ documentId });
+    await this.save();
+  }
+  return this;
+};
+
+// Method to unsave a document
+userSchema.methods.unsaveDocument = async function(documentId) {
+  this.savedDocuments = this.savedDocuments.filter(
+    savedDoc => savedDoc.documentId.toString() !== documentId.toString()
+  );
+  await this.save();
+  return this;
 };
 
 export default mongoose.model('User', userSchema);
