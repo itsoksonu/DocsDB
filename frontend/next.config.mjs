@@ -1,4 +1,3 @@
-// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -7,7 +6,8 @@ const nextConfig = {
     domains: ['your-s3-bucket.amazonaws.com'],
   },
   experimental: {
-    runtime: "nodejs"
+    runtime: "nodejs",
+    esmExternals: false, 
   },
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
