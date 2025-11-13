@@ -6,6 +6,9 @@ const nextConfig = {
   images: {
     domains: ['your-s3-bucket.amazonaws.com'],
   },
+  experimental: {
+    runtime: "nodejs"
+  },
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
   },
