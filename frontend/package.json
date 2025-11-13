@@ -22,6 +22,7 @@
     "tailwind-merge": "^2.0.0"
   },
   "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.14.5",
     "autoprefixer": "^10.0.1",
     "eslint": "8.52.0",
     "eslint-config-next": "14.0.0",
