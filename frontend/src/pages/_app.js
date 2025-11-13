@@ -1,10 +1,13 @@
-// src/pages/_app.jsx
 import { AuthProvider } from '../contexts/AuthContext.js';
-import { Toaster } from 'react-hot-toast';
+import dynamic from 'next/dynamic';
 import '../styles/globals.css';
 
-export default function App({ Component, pageProps }) {
+const Toaster = dynamic(
+  () => import('react-hot-toast').then((mod) => ({ default: mod.Toaster })),
+  { ssr: false }
+);
 
+export default function App({ Component, pageProps }) {
   return (
     <AuthProvider>
       <Component {...pageProps} />
