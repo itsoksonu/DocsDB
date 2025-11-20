@@ -14,7 +14,6 @@ const redisConfig = {
 
 export const processDocumentQueue = new Queue('document processing', redisConfig);
 
-// Process jobs
 processDocumentQueue.process('process-document', async (job) => {
   const { documentId, s3Key } = job.data;
   
@@ -28,13 +27,12 @@ processDocumentQueue.process('process-document', async (job) => {
   } catch (error) {
     logger.error(`Failed to process document ${documentId}:`, error);
     
-    // Update document status to failed
     await Document.findByIdAndUpdate(documentId, {
       status: 'failed',
       processingError: error.message
     });
     
-    throw error; // This will trigger retry logic
+    throw error; 
   }
 });
 

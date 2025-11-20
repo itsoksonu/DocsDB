@@ -2,23 +2,23 @@ import rateLimit from 'express-rate-limit';
 
 const rateLimitConfigs = {
   auth: {
-    windowMs: 1 * 60 * 1000, // 15 minutes
-    max: 50000, // 5 attempts per window
+    windowMs: 1 * 60 * 1000,
+    max: 5,
     message: 'Too many authentication attempts, please try again later.'
   },
   upload: {
-    windowMs: 60 * 60 * 1000, // 1 hour
-    max: 100, // 10 uploads per hour
+    windowMs: 60 * 60 * 1000,
+    max: 100,
     message: 'Upload limit exceeded, please try again later.'
   },
   api: {
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // 100 requests per window
+    windowMs: 15 * 60 * 1000,
+    max: 1000,
     message: 'Too many requests, please try again later.'
   },
   search: {
-    windowMs: 1 * 60 * 1000, // 1 minute
-    max: 300, // 30 searches per minute
+    windowMs: 1 * 60 * 1000,
+    max: 300,
     message: 'Search rate limit exceeded, please slow down.'
   }
 };

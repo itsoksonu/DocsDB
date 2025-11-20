@@ -18,11 +18,12 @@ const MIN_PAYOUT_AMOUNT = 50; // $50
 
 const redisClient = databaseManager.getRedisClient();
 
+
+// Calculate earnings function
 export async function calculateEarnings(eventType, data) {
   try {
     const { documentId, userId, duration, country, deviceType, adType } = data;
 
-    // Get document to check monetization status
     const document = await Document.findById(documentId);
     if (!document || !document.monetizationEnabled) {
       return 0;
@@ -37,7 +38,6 @@ export async function calculateEarnings(eventType, data) {
 
     switch (eventType) {
       case 'view':
-        // Only count views with sufficient duration
         if (duration >= MIN_VIEW_DURATION) {
           amount = (RATES.CPM / 1000) * RATES.REVENUE_SHARE;
           metadata.cpm = RATES.CPM;
@@ -52,7 +52,6 @@ export async function calculateEarnings(eventType, data) {
         break;
 
       case 'sponsored':
-        // Sponsored content has custom rates
         amount = data.customRate || (RATES.CPM * 2 / 1000) * RATES.REVENUE_SHARE;
         metadata.cpm = RATES.CPM * 2;
         metadata.adType = 'sponsored';
@@ -62,17 +61,14 @@ export async function calculateEarnings(eventType, data) {
         return 0;
     }
 
-    // Apply geo-based adjustments
     amount = applyGeoAdjustment(amount, country);
 
-    // Ensure minimum earnings
     if (amount < 0.0001) {
       return 0;
     }
 
-    // Create earnings record
     const earnings = new Earnings({
-      userId: document.userId, // Earnings go to document owner
+      userId: document.userId, 
       documentId,
       amount,
       type: eventType,
@@ -82,7 +78,6 @@ export async function calculateEarnings(eventType, data) {
 
     await earnings.save();
 
-    // Update user's wallet balance (non-blocking)
     updateWalletBalance(document.userId, amount).catch(error => {
       logger.error('Error updating wallet balance:', error);
     });
@@ -96,18 +91,16 @@ export async function calculateEarnings(eventType, data) {
   }
 }
 
+// Track monetization event function
 export async function trackMonetizationEvent(eventType, data) {
   try {
-    // Basic fraud detection
     if (await isFraudulentEvent(data)) {
       logger.warn(`Potential fraudulent event detected: ${eventType}`, data);
       return false;
     }
 
-    // Calculate and record earnings
     const amount = await calculateEarnings(eventType, data);
 
-    // Track in analytics
     logMonetizationEvent(eventType, data, amount);
 
     return amount > 0;
@@ -117,9 +110,9 @@ export async function trackMonetizationEvent(eventType, data) {
   }
 }
 
+// process payout function
 export async function processPayout(userId, amount) {
   try {
-    // Verify user and balance
     const user = await User.findById(userId);
     if (!user) {
       return { success: false, message: 'User not found' };
@@ -136,7 +129,6 @@ export async function processPayout(userId, amount) {
       };
     }
 
-    // Check if user has valid payout method
     if (!user.payoutDetails?.stripeAccountId) {
       return { 
         success: false, 
@@ -144,7 +136,6 @@ export async function processPayout(userId, amount) {
       };
     }
 
-    // Create payout record
     const payout = new Payouts({
       userId,
       amount,
@@ -154,7 +145,6 @@ export async function processPayout(userId, amount) {
 
     await payout.save();
 
-    // Deduct from user's wallet balance
     user.walletBalance -= amount;
     await user.save();
 
@@ -174,13 +164,13 @@ export async function processPayout(userId, amount) {
   }
 }
 
+// Earnings Summary Fetch Function
 export async function getEarningsSummary(userId, timeframe = 'month', page = 1, limit = 50) {
   try {
     const timeFilter = getTimeFilter(timeframe);
     const skip = (page - 1) * limit;
 
     const [earnings, totalEarnings, earningsByType, recentEarnings] = await Promise.all([
-      // Recent earnings with pagination
       Earnings.find({ 
         userId, 
         processed: true,
@@ -191,7 +181,6 @@ export async function getEarningsSummary(userId, timeframe = 'month', page = 1, 
       .skip(skip)
       .limit(limit),
 
-      // Total earnings
       Earnings.aggregate([
         { 
           $match: { 
@@ -203,7 +192,6 @@ export async function getEarningsSummary(userId, timeframe = 'month', page = 1, 
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]),
 
-      // Earnings by type
       Earnings.aggregate([
         { 
           $match: { 
@@ -221,7 +209,6 @@ export async function getEarningsSummary(userId, timeframe = 'month', page = 1, 
         }
       ]),
 
-      // Recent earnings for chart
       Earnings.aggregate([
         { 
           $match: { 
@@ -306,7 +293,6 @@ async function getWalletBalance(userId) {
 }
 
 async function getEstimatedEarnings(userId) {
-  // Get unprocessed earnings
   const result = await Earnings.aggregate([
     { 
       $match: { 
@@ -339,23 +325,21 @@ function getTimeFilter(timeframe) {
       break;
     case 'all':
     default:
-      startDate = new Date(0); // Beginning of time
+      startDate = new Date(0);
   }
 
   return { $gte: startDate };
 }
 
 async function isFraudulentEvent(data) {
-  // Basic fraud detection
   const { userId, documentId, ipAddress } = data;
 
-  // Check rate limits using Redis
   if (redisClient) {
     const key = `fraud:${userId}:${documentId}:${ipAddress}`;
     const attempts = await redisClient.incr(key);
     await redisClient.expire(key, 3600); // 1 hour TTL
 
-    if (attempts > 10) { // More than 10 events per hour from same user-document-ip combo
+    if (attempts > 10) { 
       return true;
     }
   }

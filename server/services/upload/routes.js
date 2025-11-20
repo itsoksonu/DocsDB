@@ -31,7 +31,6 @@ router.post('/presign',
       const { fileName, fileType, fileSize } = req.body;
       const userId = req.user.userId;
 
-      // Validate file type and size
       if (!S3Manager.isValidFileType(fileType, fileName)) {
         return res.status(400).json({
           success: false,
@@ -46,13 +45,10 @@ router.post('/presign',
         });
       }
 
-      // Generate unique S3 key
       const s3Key = S3Manager.generateFileKey(userId, fileName);
 
-      // Generate presigned URL
       const presignedUrl = await S3Manager.generatePresignedUrl(s3Key, fileType, fileSize);
 
-      // Create document record in database
       const document = new Document({
         userId,
         originalFilename: fileName,
@@ -101,7 +97,6 @@ router.post('/complete',
       const { documentId, key } = req.body;
       const userId = req.user.userId;
 
-      // Verify document belongs to user
       const document = await Document.findOne({
         _id: documentId,
         userId
@@ -114,7 +109,6 @@ router.post('/complete',
         });
       }
 
-      // Verify S3 key matches
       if (document.s3Path !== key) {
         return res.status(400).json({
           success: false,
@@ -122,11 +116,9 @@ router.post('/complete',
         });
       }
 
-      // Update document status to processing
       document.status = 'processing';
       await document.save();
 
-      // Add to processing queue
       await processDocumentQueue.add('process-document', {
         documentId: document._id.toString(),
         s3Key: key

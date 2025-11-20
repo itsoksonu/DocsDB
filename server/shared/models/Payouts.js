@@ -35,7 +35,7 @@ const payoutsSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for performance
+// Indexes
 payoutsSchema.index({ userId: 1, createdAt: -1 });
 payoutsSchema.index({ status: 1, createdAt: -1 });
 payoutsSchema.index({ method: 1, createdAt: -1 });

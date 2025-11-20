@@ -19,7 +19,6 @@ router.post('/refresh', async (req, res, next) => {
 
     const decoded = JWTManager.verifyRefreshToken(refreshToken);
     
-    // Generate new access token
     const tokenPayload = {
       userId: decoded.userId,
       email: decoded.email,

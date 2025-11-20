@@ -20,7 +20,7 @@ async function addSignedThumbnails(documents) {
 
   return await Promise.all(
     documents.map(async (doc) => {
-      doc = doc.toObject ? doc.toObject() : doc; // Convert if Mongoose doc
+      doc = doc.toObject ? doc.toObject() : doc;
 
       if (doc.thumbnailS3Path) {
         doc.thumbnailUrl = await s3.generateViewUrl(doc.thumbnailS3Path);
@@ -58,7 +58,6 @@ router.get(
         });
       }
 
-      // Check if user can view the document
       if (!document.isViewable() && document.userId._id.toString() !== userId) {
         return res.status(403).json({
           success: false,
@@ -66,7 +65,6 @@ router.get(
         });
       }
 
-      // Track view for analytics (non-blocking)
       trackView(document._id, userId, req.ip).catch((error) => {
         logger.error("Error tracking view:", error);
       });
@@ -116,29 +114,24 @@ router.get(
         });
       }
 
-      // Generate signed URL for secure access
       let viewUrl;
       try {
-        // Use the correct method name - it might be different
         viewUrl = await s3.generateViewUrl(document.s3Path);
 
-        // Fallback if generateViewUrl doesn't exist
         if (!viewUrl) {
           viewUrl = await S3Manager.generateDownloadUrl(
             document.s3Path,
             document.originalFilename,
-            3600 // 1 hour expiry
+            3600 
           );
         }
       } catch (error) {
         logger.error("Error generating view URL:", error);
-        // Fallback: construct direct URL if available
         viewUrl = document.s3Path
           ? `https://your-bucket.s3.amazonaws.com/${document.s3Path}`
           : null;
       }
 
-      // Prepare viewer data based on file type
       const viewerData = await getViewerData(document, page);
 
       res.json({
@@ -150,7 +143,7 @@ router.get(
             fileType: document.fileType,
             pageCount: document.pageCount,
           },
-          viewUrl: viewUrl || null, // Ensure it's a string or null, not an object
+          viewUrl: viewUrl || null,
           viewerData,
           expiresIn: 3600,
         },
@@ -190,7 +183,6 @@ router.get(
         cursor || "initial"
       }:${limit}`;
 
-      // Try Redis
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
         if (cached) {
@@ -200,7 +192,6 @@ router.get(
 
       let query = { userId, status: "processed" };
 
-      // Cursor pagination
       const mongoQuery = Document.find(query)
         .sort({ _id: -1 })
         .limit(parseInt(limit) + 1);
@@ -213,7 +204,6 @@ router.get(
       const hasMore = docs.length > limit;
       if (hasMore) docs = docs.slice(0, limit);
 
-      // Signed thumbnails
       docs = await addSignedThumbnails(docs);
 
       const response = {
@@ -222,7 +212,6 @@ router.get(
         nextCursor: hasMore ? docs[docs.length - 1]._id : null,
       };
 
-      // Cache for 2 minutes
       if (redisClient && docs.length > 0) {
         await redisClient.setEx(cacheKey, 120, JSON.stringify(response));
       }
@@ -253,7 +242,6 @@ router.patch(
       const userId = req.user.userId;
       const updates = req.body;
 
-      // Allowed fields for update
       const allowedUpdates = [
         "generatedTitle",
         "generatedDescription",
@@ -270,7 +258,6 @@ router.patch(
         }
       });
 
-      // Verify document belongs to user
       const document = await Document.findOne({ _id: id, userId });
       if (!document) {
         return res.status(404).json({
@@ -279,7 +266,6 @@ router.patch(
         });
       }
 
-      // Update document
       const updatedDocument = await Document.findByIdAndUpdate(
         id,
         { $set: updateData },
@@ -315,7 +301,6 @@ router.delete(
       const { id } = req.params;
       const userId = req.user.userId;
 
-      // Verify document belongs to user
       const document = await Document.findOne({ _id: id, userId });
       if (!document) {
         return res.status(404).json({
@@ -324,11 +309,10 @@ router.delete(
         });
       }
 
-      // Soft delete by updating status
       document.status = "deleted";
       await document.save();
 
-      // In production, you might want to actually delete from S3
+      // In production, might want to actually delete from S3
       // await S3Manager.deleteObject(document.s3Path);
 
       res.json({
@@ -359,7 +343,6 @@ router.get(
       const { id } = req.params;
       const userId = req.user.userId;
 
-      // Verify document belongs to user
       const document = await Document.findOne({ _id: id, userId });
       if (!document) {
         return res.status(404).json({
@@ -447,7 +430,7 @@ async function getDocumentAnalytics(documentId) {
     const analytics = {
       viewsLast7Days: Math.floor(Math.random() * 100),
       downloadsLast7Days: Math.floor(Math.random() * 20),
-      averageViewTime: Math.floor(Math.random() * 300), // seconds
+      averageViewTime: Math.floor(Math.random() * 300),
       geographicData: [
         { country: "US", views: Math.floor(Math.random() * 50) },
         { country: "UK", views: Math.floor(Math.random() * 30) },
@@ -455,7 +438,6 @@ async function getDocumentAnalytics(documentId) {
       ],
     };
 
-    // Cache for 1 hour
     if (redisClient) {
       await redisClient.setEx(cacheKey, 3600, JSON.stringify(analytics));
     }
@@ -485,7 +467,6 @@ router.post(
       const { id } = req.params;
       const userId = req.user.userId;
 
-      // Get user
       const User = mongoose.model("User");
       const user = await User.findById(userId);
 
@@ -496,7 +477,6 @@ router.post(
         });
       }
 
-      // Check if document exists and is viewable
       const document = await Document.findById(id);
       if (!document || !document.isViewable()) {
         return res.status(404).json({
@@ -505,7 +485,6 @@ router.post(
         });
       }
 
-      // Save document
       await user.saveDocument(id);
 
       res.json({
@@ -620,7 +599,6 @@ router.get(
 
       const cacheKey = `saveddocs:${userId}:${cursor || "initial"}:${limit}`;
 
-      // Redis Lookup
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
         if (cached) {
@@ -637,7 +615,6 @@ router.get(
 
       const valid = user.savedDocuments.filter((d) => d.documentId !== null);
 
-      // Convert into feed-like array sorted newest → older
       const sorted = valid
         .sort((a, b) => b.savedAt - a.savedAt)
         .map((item) => ({
@@ -645,7 +622,6 @@ router.get(
           ...item.documentId.toObject(),
         }));
 
-      // Cursor Pagination
       let startIndex = 0;
       if (cursor) {
         startIndex = sorted.findIndex((x) => x._id.toString() === cursor) + 1;
@@ -654,7 +630,6 @@ router.get(
       const sliced = sorted.slice(startIndex, startIndex + parseInt(limit));
       const hasMore = sorted.length > startIndex + sliced.length;
 
-      // Signed Thumbnails
       const docsWithThumb = await addSignedThumbnails(sliced);
 
       const response = {
@@ -663,7 +638,6 @@ router.get(
         nextCursor: hasMore ? sliced[sliced.length - 1]._id : null,
       };
 
-      // Cache 3 minutes
       if (redisClient && sliced.length > 0) {
         await redisClient.setEx(cacheKey, 180, JSON.stringify(response));
       }

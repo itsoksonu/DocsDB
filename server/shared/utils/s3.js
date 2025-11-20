@@ -34,7 +34,7 @@ class S3Manager {
         }
       });
 
-      return await getSignedUrl(this.s3Client, command, { expiresIn: 3600 }); // 1 hour
+      return await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
     } catch (error) {
       logger.error('Error generating presigned URL:', error);
       throw error;
@@ -154,7 +154,7 @@ class S3Manager {
 
   // Validate file size
   isValidFileSize(sizeBytes) {
-    const maxSize = parseInt(process.env.MAX_FILE_SIZE) || 104857600; // 100MB default
+    const maxSize = parseInt(process.env.MAX_FILE_SIZE) || 104857600; // 100MB 
     return sizeBytes <= maxSize;
   }
 }

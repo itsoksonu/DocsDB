@@ -15,11 +15,9 @@ export async function moderateContent(documentId, options = {}) {
 
     const { autoApprove = true, checkSensitiveContent = true } = options;
 
-    // AI-based content moderation (placeholder)
     const moderationResult = await performAIModeration(document);
 
     if (moderationResult.flagged && !autoApprove) {
-      // Create moderation report
       const report = new Report({
         documentId,
         targetUserId: document.userId,
@@ -36,7 +34,6 @@ export async function moderateContent(documentId, options = {}) {
 
       await report.save();
 
-      // Update document status
       document.status = 'under_review';
       await document.save();
 
@@ -112,10 +109,8 @@ export async function takeDownDocument(documentId, options) {
       return { success: false, message: 'Document not found' };
     }
 
-    // Store previous status for potential restoration
     const previousStatus = document.status;
     
-    // Take down document
     document.status = 'taken_down';
     document.takedownReason = reason;
     document.takedownAt = new Date();
@@ -123,7 +118,6 @@ export async function takeDownDocument(documentId, options) {
 
     await document.save();
 
-    // Notify user if requested
     let notificationSent = false;
     if (notifyUser) {
       notificationSent = await notifyUserOfTakedown(document.userId, {
@@ -133,7 +127,6 @@ export async function takeDownDocument(documentId, options) {
       });
     }
 
-    // Log the action
     await logModerationAction({
       action: 'DOCUMENT_TAKEDOWN',
       moderatorId: adminId,
@@ -170,7 +163,6 @@ export async function restoreDocument(documentId, options) {
       return { success: false, message: 'Document is not taken down' };
     }
 
-    // Restore document
     document.status = document.previousStatus || 'processed';
     document.takedownReason = undefined;
     document.takedownAt = undefined;
@@ -179,13 +171,11 @@ export async function restoreDocument(documentId, options) {
 
     await document.save();
 
-    // Notify user
     await notifyUserOfRestoration(document.userId, {
       documentTitle: document.generatedTitle,
       reason
     });
 
-    // Log the action
     await logModerationAction({
       action: 'DOCUMENT_RESTORATION',
       moderatorId: adminId,
@@ -224,7 +214,6 @@ export async function generateAdminStats() {
       getSystemHealth()
     ]);
 
-    // Calculate moderation metrics
     const moderationStats = await Report.aggregate([
       {
         $group: {
@@ -234,7 +223,6 @@ export async function generateAdminStats() {
       }
     ]);
 
-    // Calculate content metrics
     const contentStats = await Document.aggregate([
       {
         $group: {
@@ -283,7 +271,6 @@ async function performAIModeration(document) {
     categories: ['content_quality']
   };
 
-  // Simulate API call delay
   await new Promise(resolve => setTimeout(resolve, 100));
 
   return mockResult;
@@ -297,7 +284,6 @@ async function approveReport(report, { reason, moderatorId }) {
   await report.addAction('approved', moderatorId, { reason });
   await report.save();
 
-  // Take action based on report type
   const actionsTaken = [];
   
   if (report.documentId) {
@@ -313,7 +299,6 @@ async function approveReport(report, { reason, moderatorId }) {
   }
 
   if (report.targetUserId) {
-    // Could take action against user (warnings, suspension, etc.)
     actionsTaken.push('user_notified');
   }
 
@@ -359,7 +344,6 @@ async function escalateReport(report, { reason, severity, moderatorId }) {
 async function requestMoreInfo(report, { reason, moderatorId }) {
   await report.addAction('info_requested', moderatorId, { reason });
 
-  // Notify reporter
   await notifyReporter(report.reporterId, {
     type: 'more_info_requested',
     reportId: report._id,

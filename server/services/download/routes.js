@@ -40,7 +40,6 @@ router.post('/:id/request',
       const userId = req.user.userId;
       const userIp = req.ip;
 
-      // Validate download request
       const validation = await validateDownloadRequest(id, userId, userIp);
       if (!validation.valid) {
         return res.status(validation.statusCode || 400).json({
@@ -49,7 +48,6 @@ router.post('/:id/request',
         });
       }
 
-      // Create download session
       const session = await createDownloadSession({
         documentId: id,
         userId,
@@ -57,7 +55,6 @@ router.post('/:id/request',
         userAgent: req.get('User-Agent')
       });
 
-      // Get ad for download interstitial
       const ad = await getAdForDownload(userId);
 
       res.json({
@@ -105,7 +102,6 @@ router.post('/:id/complete',
       const { sessionId, adCompleted = false } = req.body;
       const userId = req.user.userId;
 
-      // Complete download session and validate
       const session = await completeDownloadSession(sessionId, userId, adCompleted);
       if (!session.valid) {
         return res.status(400).json({
@@ -114,7 +110,6 @@ router.post('/:id/complete',
         });
       }
 
-      // Get document for download URL
       const document = await Document.findById(id);
       if (!document) {
         return res.status(404).json({
@@ -123,26 +118,22 @@ router.post('/:id/complete',
         });
       }
 
-      // Generate signed download URL
       const downloadUrl = S3Manager.generateDownloadUrl(
         document.s3Path,
         document.originalFilename,
-        3600 // 1 hour expiry
+        3600
       );
 
-      // Track download for analytics and monetization
       const downloadTracked = await trackDownload(id, userId, req.ip);
       if (downloadTracked) {
-        // Record monetization event
         await trackMonetizationEvent('download', {
           documentId: id,
-          userId: document.userId, // Document owner gets earnings
+          userId: document.userId,
           country: getCountryFromIp(req.ip),
           deviceType: getDeviceType(req.get('User-Agent'))
         });
       }
 
-      // Log successful download
       logger.info(`Download completed for document ${id} by user ${userId}`);
 
       res.json({
@@ -220,7 +211,6 @@ router.post('/ad/view',
       const { sessionId, adId } = req.body;
       const userId = req.user.userId;
 
-      // Verify session belongs to user
       const sessionKey = `download:session:${sessionId}`;
       if (redisClient) {
         const sessionData = await redisClient.get(sessionKey);
@@ -239,13 +229,11 @@ router.post('/ad/view',
           });
         }
 
-        // Mark ad as viewed in session
         session.adViewed = true;
         session.adViewedAt = new Date().toISOString();
         await redisClient.setEx(sessionKey, session.ttl, JSON.stringify(session));
       }
 
-      // Track ad view for analytics
       await trackAdView(adId, userId);
 
       res.json({
@@ -320,7 +308,7 @@ async function getDownloadHistory(userId, page, limit) {
   };
 
   if (redisClient) {
-    await redisClient.setEx(cacheKey, 300, JSON.stringify(mockHistory)); // 5 minutes cache
+    await redisClient.setEx(cacheKey, 300, JSON.stringify(mockHistory));
   }
 
   return mockHistory;

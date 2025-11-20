@@ -5,10 +5,10 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import 'dotenv/config';
 
-// Import middleware and routes
 import { errorHandler } from './shared/middleware/errorHandler.js';
 import { requestLogger } from './shared/middleware/logger.js';
 import { securityHeaders } from './shared/middleware/security.js';
+
 import authRoutes from './services/auth/routes.js';
 import uploadRoutes from './services/upload/routes.js';
 import documentRoutes from './services/document/routes.js';
@@ -18,13 +18,11 @@ import downloadRoutes from './services/download/routes.js';
 import adminRoutes from './services/admin/routes.js';
 import oauthRoutes from './services/OAuth/routes.js';
 
-// Database connection - import the default export
 import databaseManager from './shared/database/connection.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -42,7 +40,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
@@ -50,20 +47,15 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Body parsing middleware
 app.use(json({ limit: '10mb' }));
 app.use(urlencoded({ extended: true, limit: '10mb' }));
 
-// Compression
 app.use(compression());
 
-// Request logging
 app.use(requestLogger);
 
-// Security headers
 app.use(securityHeaders);
 
-// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
@@ -83,10 +75,8 @@ app.use(`/api/${process.env.API_VERSION || 'v1'}/monetization`, monetizationRout
 app.use(`/api/${process.env.API_VERSION || 'v1'}/download`, downloadRoutes);
 app.use(`/api/${process.env.API_VERSION || 'v1'}/admin`, adminRoutes);
 
-// Error handling (must be last)
 app.use(errorHandler);
 
-// 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
@@ -95,10 +85,8 @@ app.use('*', (req, res) => {
   });
 });
 
-// Start server
 async function startServer() {
   try {
-    // Connect to databases using the database manager
     await databaseManager.connectMongo();
     await databaseManager.connectRedis();
 

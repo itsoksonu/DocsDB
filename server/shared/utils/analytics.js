@@ -12,30 +12,25 @@ export async function trackView(documentId, userId, ipAddress) {
     const now = Date.now();
     const viewKey = `${VIEW_TRACKING_PREFIX}${documentId}:${userId}:${now}`;
 
-    // Check for duplicate views within short period (5 minutes)
     const recentViews = await checkRecentViews(documentId, userId, ipAddress);
     if (recentViews > 0) {
       logger.debug(`Duplicate view detected for document ${documentId} by user ${userId}`);
       return;
     }
 
-    // Record view with temporary key (expires in 5 minutes)
     if (redisClient) {
       await redisClient.setEx(viewKey, 300, '1');
       
-      // Also track by IP for fraud detection
       const ipKey = `view:ip:${ipAddress}:${documentId}`;
       await redisClient.setEx(ipKey, 300, '1');
     }
 
-    // Increment view count in database (non-blocking)
     Document.findByIdAndUpdate(documentId, {
       $inc: { viewsCount: 1 }
     }).catch(error => {
       logger.error('Error incrementing view count:', error);
     });
 
-    // Log view for monetization processing
     logViewEvent({
       documentId,
       userId,
@@ -51,12 +46,10 @@ export async function trackView(documentId, userId, ipAddress) {
 
 export async function trackViewDuration(documentId, userId, durationMs) {
   try {
-    // Only count views longer than threshold for monetization
     if (durationMs < VIEW_DURATION_THRESHOLD) {
       return;
     }
 
-    // Log duration for analytics
     logger.info(`View duration tracked: ${durationMs}ms for document ${documentId} by user ${userId}`);
 
     // In production, this would send to analytics service
@@ -69,7 +62,6 @@ export async function trackViewDuration(documentId, userId, durationMs) {
 
 export async function trackDownload(documentId, userId, ipAddress) {
   try {
-    // Check for duplicate downloads within short period
     const downloadKey = `download:${documentId}:${userId}:${Date.now()}`;
     
     if (redisClient) {
@@ -82,12 +74,10 @@ export async function trackDownload(documentId, userId, ipAddress) {
       await redisClient.setEx(downloadKey, 300, '1');
     }
 
-    // Increment download count
     await Document.findByIdAndUpdate(documentId, {
       $inc: { downloadsCount: 1 }
     });
 
-    // Log download for monetization
     logDownloadEvent({
       documentId,
       userId,

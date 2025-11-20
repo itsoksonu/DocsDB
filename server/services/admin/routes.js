@@ -348,7 +348,6 @@ router.patch('/users/:userId/status',
         });
       }
 
-      // Update user status
       user.status = status;
       user.statusReason = reason;
       
@@ -360,7 +359,6 @@ router.patch('/users/:userId/status',
 
       await user.save();
 
-      // Log the action
       await logAdminAction({
         adminId,
         action: 'UPDATE_USER_STATUS',
@@ -419,7 +417,6 @@ router.get('/users/:userId',
         });
       }
 
-      // Get additional user stats
       const userStats = await getUserStats(userId);
 
       res.json({
@@ -593,10 +590,8 @@ async function getSystemHealth() {
     Document.countDocuments({ status: 'failed' })
   ]);
 
-  // Check database connection
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
 
-  // Check Redis connection
   let redisStatus = 'disconnected';
   if (redisClient) {
     try {

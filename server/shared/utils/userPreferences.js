@@ -3,13 +3,12 @@ import User from '../models/User.js';
 import logger from './logger.js';
 
 const USER_PREFS_PREFIX = 'user:prefs:';
-const PREF_TTL = 86400; // 24 hours
+const PREF_TTL = 86400;
 
 const redisClient = databaseManager.getRedisClient();
 
 export async function getUserPreferences(userId) {
   try {
-    // Try cache first
     if (redisClient) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;
       const cached = await redisClient.get(cacheKey);
@@ -18,10 +17,8 @@ export async function getUserPreferences(userId) {
       }
     }
 
-    // Generate preferences based on user behavior
     const preferences = await generateUserPreferences(userId);
 
-    // Cache the preferences
     if (redisClient) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;
       await redisClient.setEx(cacheKey, PREF_TTL, JSON.stringify(preferences));
@@ -36,7 +33,6 @@ export async function getUserPreferences(userId) {
 
 async function generateUserPreferences(userId) {
   try {
-    // Get user's document uploads to infer preferences
     const userDocs = await User.aggregate([
       { $match: { _id: userId } },
       {
@@ -77,13 +73,11 @@ async function generateUserPreferences(userId) {
 
     const userData = userDocs[0];
     
-    // Calculate category preferences
     const categoryCounts = {};
     userData.preferredCategories.forEach(category => {
       categoryCounts[category] = (categoryCounts[category] || 0) + 1;
     });
 
-    // Get top 3 categories
     const preferredCategories = Object.entries(categoryCounts)
       .sort(([,a], [,b]) => b - a)
       .slice(0, 3)
@@ -92,7 +86,7 @@ async function generateUserPreferences(userId) {
     return {
       preferredCategories: preferredCategories.length > 0 
         ? preferredCategories 
-        : ['technology', 'business', 'education'], // Fallback
+        : ['technology', 'business', 'education'],
       docCount: userData.docCount,
       lastUpdated: new Date()
     };
@@ -112,7 +106,6 @@ function getDefaultPreferences() {
 
 export async function updateUserPreferences(userId, interactions) {
   try {
-    // Clear cached preferences to force regeneration
     if (redisClient) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;
       await redisClient.del(cacheKey);

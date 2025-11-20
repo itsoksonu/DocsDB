@@ -78,11 +78,21 @@ export default function Home() {
   ];
 
   const loadDocuments = async () => {
+    const storageKey = `docs_cache_${selectedCategory}`;
+
     try {
-      setLoading(true);
+      const cachedData = sessionStorage.getItem(storageKey);
+
+      if(cachedData) {
+        const parsedData = JSON.parse(cachedData);
+        setDocuments(parsedData);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
 
       const params = {
-        limit: 42, // Fetch exactly 42 documents
+        limit: 42, 
         category: selectedCategory === "for-you" ? null : selectedCategory,
         sort: selectedCategory === "for-you" ? "relevant" : "newest",
       };
@@ -90,9 +100,19 @@ export default function Home() {
       const response = await apiService.getFeed(params);
       const { documents: newDocs } = response.data;
 
-      setDocuments(newDocs);
+      if (JSON.stringify(newDocs) !== cachedData) {
+        setDocuments(newDocs);
+        sessionStorage.setItem(storageKey, JSON.stringify(newDocs));
+      }
+
     } catch (error) {
-      toast.error("Failed to load documents");
+      const currentCache = sessionStorage.getItem(storageKey);
+      if (!currentCache) {
+        toast.error("Failed to load documents");
+      } else {
+        console.warn("Background fetch failed, using cached data");
+      }
+      
     } finally {
       setLoading(false);
     }

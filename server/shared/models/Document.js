@@ -54,7 +54,7 @@ const documentSchema = new mongoose.Schema({
     default: 'other',
     index: true
   },
-  embeddingsId: String, // Pinecone vector ID
+  embeddingsId: String,
   visibility: {
     type: String,
     enum: ['public', 'private', 'unlisted'],
@@ -84,21 +84,21 @@ const documentSchema = new mongoose.Schema({
     scanner: String,
     scannedAt: Date
   },
-  metadata: mongoose.Schema.Types.Mixed // Additional AI-generated metadata
+  metadata: mongoose.Schema.Types.Mixed 
 }, {
   timestamps: true
 });
 
-// Compound indexes for performance
+// indexes
 documentSchema.index({ userId: 1, createdAt: -1 });
 documentSchema.index({ status: 1, createdAt: -1 });
 documentSchema.index({ category: 1, createdAt: -1 });
-documentSchema.index({ tags: 1 }); // For tag-based searches
+documentSchema.index({ tags: 1 }); 
 documentSchema.index({ 
   'generatedTitle': 'text', 
   'generatedDescription': 'text',
   'tags': 'text'
-}); // Text search index
+});
 
 // Virtual for formatted file size
 documentSchema.virtual('formattedSize').get(function() {

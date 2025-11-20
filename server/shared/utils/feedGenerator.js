@@ -12,18 +12,15 @@ export async function generateFeed({
   includeAds = true
 }) {
   try {
-    // Build base query
     const query = {
       status: 'processed',
       visibility: 'public'
     };
 
-    // Add category filter
     if (category) {
       query.category = category;
     }
 
-    // Add cursor for pagination
     if (cursor) {
       const cursorDoc = await Document.findById(cursor).select('createdAt');
       if (cursorDoc) {
@@ -31,14 +28,12 @@ export async function generateFeed({
       }
     }
 
-    // Determine sort order
     let sortOptions = {};
     switch (sort) {
       case 'popular':
         sortOptions = { viewsCount: -1, createdAt: -1 };
         break;
       case 'relevant':
-        // This would use user preferences and embeddings
         sortOptions = await getRelevanceSort(userId);
         break;
       case 'newest':
@@ -46,29 +41,24 @@ export async function generateFeed({
         sortOptions = { createdAt: -1 };
     }
 
-    // Fetch documents
     const documents = await Document.find(query)
       .select('-metadata -embeddingsId')
       .populate('userId', 'name')
       .sort(sortOptions)
-      .limit(limit + 10); // Fetch extra to account for ad insertion
+      .limit(limit + 10);
 
     let feedDocuments = [...documents];
 
-    // Inject ads if enabled
     if (includeAds && feedDocuments.length > 0) {
       feedDocuments = await injectAds(feedDocuments, userId);
     }
 
-    // Trim to requested limit
     feedDocuments = feedDocuments.slice(0, limit);
 
-    // Get next cursor
     const nextCursor = feedDocuments.length > 0 
       ? feedDocuments[feedDocuments.length - 1]._id 
       : null;
 
-    // Get user preferences for personalized response
     const userPrefs = await getUserPreferences(userId);
 
     return {
@@ -114,7 +104,6 @@ async function injectAds(documents, userId) {
     for (let i = 0; i < documents.length; i++) {
       result.push(documents[i]);
 
-      // Inject ad after every adFrequency items, but not at the very start or end
       if ((i + 1) % adFrequency === 0 && i > 0 && i < documents.length - 2) {
         if (adIndex < sponsoredDocs.length) {
           const adDoc = {
@@ -131,20 +120,17 @@ async function injectAds(documents, userId) {
     return result;
   } catch (error) {
     logger.error('Error injecting ads:', error);
-    return documents; // Return original documents if ad injection fails
+    return documents;
   }
 }
 
-// Generate personalized feed based on user behavior
 export async function generatePersonalizedFeed(userId, limit = 20) {
   const userPrefs = await getUserPreferences(userId);
   
   if (!userPrefs || !userPrefs.preferredCategories) {
-    // Fallback to trending if no preferences
     return generateFeed({ userId, limit, sort: 'popular' });
   }
 
-  // Get documents from preferred categories
   const preferredDocs = await Document.find({
     status: 'processed',
     visibility: 'public',
@@ -155,7 +141,6 @@ export async function generatePersonalizedFeed(userId, limit = 20) {
   .sort({ viewsCount: -1, createdAt: -1 })
   .limit(limit);
 
-  // If we don't have enough preferred docs, fill with trending
   if (preferredDocs.length < limit) {
     const remaining = limit - preferredDocs.length;
     const trendingDocs = await Document.find({
@@ -176,7 +161,7 @@ export async function generatePersonalizedFeed(userId, limit = 20) {
   return {
     documents: feedDocuments,
     pagination: {
-      hasMore: false, // Simplified for personalized feed
+      hasMore: false, 
       limit
     },
     metadata: {

@@ -52,10 +52,9 @@ class NodeCanvasFactory {
   }
 
   reset(canvasAndContext, width, height) {
-    // Do nothing - https://github.com/mozilla/pdf.js/issues/12476
     canvasAndContext.canvas.width = width;
     canvasAndContext.canvas.height = height;
-    canvasAndContext.canvas.style = {}; // Fix for scaled canvas
+    canvasAndContext.canvas.style = {};
   }
 
   destroy(canvasAndContext) {
@@ -126,7 +125,6 @@ async function performVirusScan(s3Key) {
   try {
     logger.info(`Starting virus scan for: ${s3Key}`);
     
-    // Check if ClamAV is available
     try {
       await execAsync('which clamscan');
     } catch {
@@ -134,7 +132,6 @@ async function performVirusScan(s3Key) {
       return await performBasicFileValidation(s3Key);
     }
 
-    // Download file for scanning
     const fileBuffer = await S3Manager.getObjectBuffer(s3Key);
     const tmpPath = join(tmpdir(), `scan-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`);
     
@@ -142,14 +139,12 @@ async function performVirusScan(s3Key) {
     await fs.promises.writeFile(tmpPath, fileBuffer);
 
     try {
-      // Perform ClamAV scan
       const { stdout, stderr } = await execAsync(`clamscan --no-summary --infected "${tmpPath}"`);
       
       if (stderr && stderr.includes('FOUND')) {
         throw new Error(`Virus detected: ${stderr}`);
       }
 
-      // Additional security checks
       await validateFileSafety(tmpPath, s3Key);
 
       logger.info(`✅ Virus scan completed for: ${s3Key}`);
@@ -207,12 +202,10 @@ async function validateFileSafety(filePath, s3Key) {
   const fs = await import("fs");
   const fileStats = await fs.promises.stat(filePath);
   
-  // Check for suspicious file characteristics
   if (fileStats.size === 0) {
     throw new Error("Empty file detected");
   }
 
-  // Check file size (max 50MB)
   if (fileStats.size > 50 * 1024 * 1024) {
     throw new Error("File too large (max 50MB)");
   }
@@ -220,10 +213,8 @@ async function validateFileSafety(filePath, s3Key) {
 
 async function ensurePDFDependencies() {
   try {
-    // Check if canvas is available
     await import('canvas');
     
-    // Check if pdfjs-dist is available
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
     
     logger.info('✅ PDF thumbnail dependencies are available');
@@ -238,7 +229,6 @@ async function generateThumbnail(filePath, fileType) {
   try {
     logger.info(`Generating thumbnail for ${fileType} file: ${filePath}`);
     
-    // Check if file exists and is accessible
     const fs = await import("fs");
     try {
       await fs.promises.access(filePath);
@@ -249,7 +239,6 @@ async function generateThumbnail(filePath, fileType) {
     
     switch (fileType) {
       case "pdf":
-        // Check dependencies first
         const pdfDepsAvailable = await ensurePDFDependencies();
         if (!pdfDepsAvailable) {
           logger.warn('PDF dependencies not available, using enhanced fallback');
@@ -284,17 +273,14 @@ async function generatePDFThumbnail(filePath) {
 
     logger.info(`Generating PDF thumbnail for: ${filePath}`);
 
-    // Read PDF file
     const dataBuffer = await fs.promises.readFile(filePath);
     const uint8Array = new Uint8Array(dataBuffer);
     
     const canvasFactory = new NodeCanvasFactory();
 
-    // Optional: for better font and cmap support
     const CMAP_URL = join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'cmaps') + '/';
     const STANDARD_FONT_DATA_URL = join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'standard_fonts') + '/';
 
-    // Load PDF document
     const pdf = await pdfjsLib.getDocument({ 
       data: uint8Array,
       verbosity: 0,
@@ -306,33 +292,27 @@ async function generatePDFThumbnail(filePath) {
 
     logger.info(`PDF loaded successfully. Pages: ${pdf.numPages}`);
 
-    // Use first page for thumbnail
     const page = await pdf.getPage(1);
     const viewport = page.getViewport({ scale: 1.0 });
     
-    // Calculate dimensions for thumbnail (300x400)
     const scale = Math.min(300 / viewport.width, 400 / viewport.height) * 0.8;
     const scaledViewport = page.getViewport({ scale });
     
-    // Create canvas using factory
     const canvasAndContext = canvasFactory.create(
       scaledViewport.width,
       scaledViewport.height
     );
     const ctx = canvasAndContext.context;
 
-    // Professional background
     const gradient = ctx.createLinearGradient(0, 0, scaledViewport.width, scaledViewport.height);
     gradient.addColorStop(0, '#f8f9fa');
     gradient.addColorStop(1, '#e9ecef');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, scaledViewport.width, scaledViewport.height);
     
-    // White background for PDF content
     ctx.fillStyle = 'white';
     ctx.fillRect(-5, -5, scaledViewport.width + 10, scaledViewport.height + 10);
     
-    // Render PDF page to canvas
     const renderContext = {
       canvasContext: ctx,
       viewport: scaledViewport
@@ -341,12 +321,10 @@ async function generatePDFThumbnail(filePath) {
     await page.render(renderContext).promise;
     logger.info('PDF page rendered successfully');
 
-    // Add border
     ctx.strokeStyle = '#dee2e6';
     ctx.lineWidth = 2;
     ctx.strokeRect(-5, -5, scaledViewport.width + 10, scaledViewport.height + 10);
 
-    // Add subtle shadow
     ctx.shadowColor = 'rgba(0,0,0,0.1)';
     ctx.shadowBlur = 5;
     ctx.shadowOffsetX = 2;
@@ -354,11 +332,9 @@ async function generatePDFThumbnail(filePath) {
     ctx.strokeRect(-5, -5, scaledViewport.width + 10, scaledViewport.height + 10);
     ctx.shadowColor = 'transparent';
 
-    // Now, to fit into 300x400, create a larger canvas and draw this one centered
     const fullCanvas = createCanvas(300, 400);
     const fullCtx = fullCanvas.getContext('2d');
 
-    // Background for full
     const fullGradient = fullCtx.createLinearGradient(0, 0, 300, 400);
     fullGradient.addColorStop(0, '#f8f9fa');
     fullGradient.addColorStop(1, '#e9ecef');
@@ -368,10 +344,8 @@ async function generatePDFThumbnail(filePath) {
     const xOffset = (300 - scaledViewport.width) / 2;
     const yOffset = (400 - scaledViewport.height) / 2;
 
-    // Draw the rendered content centered
     fullCtx.drawImage(canvasAndContext.canvas, xOffset, yOffset);
 
-    // Cleanup
     canvasFactory.destroy(canvasAndContext);
     page.cleanup();
     pdf.destroy();
@@ -390,7 +364,6 @@ async function generatePDFThumbnail(filePath) {
       filePath: filePath
     });
     
-    // Return enhanced fallback thumbnail for PDF
     return await generateEnhancedPDFFallback(filePath);
   }
 }
@@ -404,11 +377,9 @@ async function generateEnhancedPDFFallback(filePath) {
     let fileSize = 'Unknown';
     
     try {
-      // Get file stats for size
       const stats = await fs.promises.stat(filePath);
       fileSize = formatFileSize(stats.size);
       
-      // Try to get page count without worker
       const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
       const dataBuffer = await fs.promises.readFile(filePath);
       const uint8Array = new Uint8Array(dataBuffer);
@@ -421,7 +392,7 @@ async function generateEnhancedPDFFallback(filePath) {
     const canvas = createCanvas(300, 400);
     const ctx = canvas.getContext('2d');
     
-    // Professional PDF-style background
+    // PDF-style background
     const gradient = ctx.createLinearGradient(0, 0, 300, 400);
     gradient.addColorStop(0, '#dc3545');
     gradient.addColorStop(1, '#c82333');
@@ -735,7 +706,7 @@ async function generateFallbackThumbnail(fileType) {
     const canvas = createCanvas(300, 400);
     const ctx = canvas.getContext('2d');
     
-    // Professional gradient background based on file type
+    // gradient background based on file type
     const gradients = {
       pdf: ['#ff6b6b', '#ee5a52'],
       docx: ['#4f6bed', '#3b5bdb'],
@@ -904,7 +875,7 @@ async function generateEnhancedMetadata(content, filename, fileType) {
   try {
     const geminiResult = await generateWithGemini(content, filename);
     if (geminiResult?.title) {
-      logger.info('✅ Used Google Gemini for metadata');
+      logger.info('Used Google Gemini for metadata');
       return enrichMetadataWithLocalData(geminiResult, content, fileType, 'gemini');
     }
   } catch (error) {
@@ -914,7 +885,7 @@ async function generateEnhancedMetadata(content, filename, fileType) {
   try {
     const groqResult = await generateWithGroq(content, filename);
     if (groqResult?.title) {
-      logger.info('✅ Used Groq for metadata');
+      logger.info('Used Groq for metadata');
       return enrichMetadataWithLocalData(groqResult, content, fileType, 'groq');
     }
   } catch (error) {
@@ -924,7 +895,7 @@ async function generateEnhancedMetadata(content, filename, fileType) {
   try {
     const hfResult = await generateWithHuggingFace(content, filename);
     if (hfResult?.title) {
-      logger.info('✅ Used Hugging Face for metadata');
+      logger.info('Used Hugging Face for metadata');
       return enrichMetadataWithLocalData(hfResult, content, fileType, 'huggingface');
     }
   } catch (error) {
@@ -934,14 +905,14 @@ async function generateEnhancedMetadata(content, filename, fileType) {
   try {
     const ollamaResult = await generateWithOllama(content, filename);
     if (ollamaResult?.title) {
-      logger.info('✅ Used Ollama for metadata');
+      logger.info('Used Ollama for metadata');
       return enrichMetadataWithLocalData(ollamaResult, content, fileType, 'ollama');
     }
   } catch (error) {
     logger.warn(`Ollama failed: ${error.message}`);
   }
 
-  logger.info('ℹ️ Using smart local processing for metadata');
+  logger.info('Using smart local processing for metadata');
   return generateUniversalMetadata(content, filename, fileType);
 }
 

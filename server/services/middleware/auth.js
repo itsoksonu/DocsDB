@@ -15,7 +15,6 @@ export const authMiddleware = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = JWTManager.verifyAccessToken(token);
 
-    // Verify user still exists and is active
     const user = await User.findById(decoded.userId);
     if (!user) {
       return res.status(401).json({
@@ -24,7 +23,6 @@ export const authMiddleware = async (req, res, next) => {
       });
     }
 
-    // Add user info to request
     req.user = {
       userId: decoded.userId,
       email: decoded.email,

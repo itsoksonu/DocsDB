@@ -1,7 +1,6 @@
 import Stripe from 'stripe';
 import logger from '../utils/logger.js';
 
-// Initialize Stripe
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2023-10-16',
   maxNetworkRetries: 3,
@@ -41,7 +40,6 @@ export async function handleStripeWebhook(event) {
 
 async function handleAccountUpdated(account) {
   try {
-    // Find user by Stripe account ID
     const User = (await import('../models/User.js')).default;
     const user = await User.findOne({ 
       'payoutDetails.stripeAccountId': account.id 
@@ -52,7 +50,6 @@ async function handleAccountUpdated(account) {
       return;
     }
 
-    // Update KYC status based on Stripe account status
     const isVerified = account.charges_enabled && account.payouts_enabled;
     user.kycStatus = isVerified ? 'verified' : 'pending';
     
@@ -68,7 +65,6 @@ async function handleTransferFailed(transfer) {
   try {
     const Payouts = (await import('../models/Payouts.js')).default;
     
-    // Find payout by transaction ID
     const payout = await Payouts.findOne({ transactionId: transfer.id });
     if (payout) {
       await payout.fail(`Transfer failed: ${transfer.failure_message}`);

@@ -1,6 +1,5 @@
 import winston from 'winston';
 
-// Create logger instance
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
@@ -24,7 +23,6 @@ const logger = winston.createLogger({
   ]
 });
 
-// Add console transport in non-production environments
 if (process.env.NODE_ENV !== 'production') {
   logger.add(new winston.transports.Console({
     format: winston.format.combine(
@@ -34,7 +32,6 @@ if (process.env.NODE_ENV !== 'production') {
   }));
 }
 
-// Request logger middleware
 export const requestLogger = (req, res, next) => {
   const start = Date.now();
 

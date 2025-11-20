@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
-    required: true, // Always required now since we only use OAuth
+    required: true,
     unique: true,
     lowercase: true,
     trim: true,
@@ -15,7 +15,6 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: [255, 'Name cannot exceed 255 characters']
   },
-  // OAuth2 providers (only Google supported)
   authProviders: [{
     provider: {
       type: String,
@@ -80,13 +79,13 @@ const userSchema = new mongoose.Schema({
   timestamps: true,
   toJSON: {
     transform: function(doc, ret) {
-      delete ret.authProviders; // Don't expose provider details
+      delete ret.authProviders;
       return ret;
     }
   }
 });
 
-// Indexes for performance
+// Indexes
 userSchema.index({ createdAt: -1 });
 userSchema.index({ kycStatus: 1 });
 userSchema.index({ 'authProviders.provider': 1, 'authProviders.providerId': 1 });
@@ -99,13 +98,11 @@ userSchema.methods.addAuthProvider = async function(providerData) {
   );
   
   if (existingProvider) {
-    // Update existing provider
     existingProvider.providerId = providerData.providerId;
     existingProvider.accessToken = providerData.accessToken;
     existingProvider.refreshToken = providerData.refreshToken;
     existingProvider.connectedAt = new Date();
   } else {
-    // Add new provider
     this.authProviders.push(providerData);
   }
   

@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 
 const reportSchema = new mongoose.Schema({
-  // Reporter information
   reporterId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -9,8 +8,6 @@ const reportSchema = new mongoose.Schema({
   },
   reporterIp: String,
   reporterUserAgent: String,
-
-  // Target information
   documentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Document'
@@ -19,8 +16,6 @@ const reportSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
-
-  // Report details
   type: {
     type: String,
     enum: ['copyright', 'spam', 'inappropriate', 'harassment', 'fraud', 'other'],
@@ -36,9 +31,7 @@ const reportSchema = new mongoose.Schema({
     required: true,
     maxlength: 1000
   },
-  evidence: [String], // URLs or references to evidence
-
-  // Moderation details
+  evidence: [String],
   status: {
     type: String,
     enum: ['pending', 'under_review', 'approved', 'rejected', 'escalated'],
@@ -54,8 +47,6 @@ const reportSchema = new mongoose.Schema({
     ref: 'User'
   },
   moderatorNotes: String,
-
-  // Actions taken
   actionsTaken: [{
     action: String,
     timestamp: Date,
@@ -65,18 +56,14 @@ const reportSchema = new mongoose.Schema({
     },
     details: mongoose.Schema.Types.Mixed
   }],
-
-  // Resolution
   resolvedAt: Date,
   resolution: String,
-
-  // Metadata
   metadata: mongoose.Schema.Types.Mixed
 }, {
   timestamps: true
 });
 
-// Indexes for performance
+// Indexes
 reportSchema.index({ status: 1, priority: -1, createdAt: -1 });
 reportSchema.index({ documentId: 1, status: 1 });
 reportSchema.index({ targetUserId: 1, status: 1 });

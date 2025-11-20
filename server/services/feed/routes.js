@@ -26,7 +26,7 @@ async function addSignedThumbnails(documents) {
   
   return await Promise.all(
     documents.map(async (doc) => {
-      doc = doc.toObject ? doc.toObject() : doc; // Convert if Mongoose doc
+      doc = doc.toObject ? doc.toObject() : doc;
       
       if (doc.thumbnailS3Path) {
         doc.thumbnailUrl = await s3.generateViewUrl(doc.thumbnailS3Path);
@@ -37,7 +37,7 @@ async function addSignedThumbnails(documents) {
   );
 }
 
-// Get infinite scroll feed (PUBLIC - no auth required)
+// get documents
 router.get('/', 
   rateLimitMiddleware('search'),
   feedValidation,
@@ -54,13 +54,10 @@ router.get('/',
 
       const { cursor, limit, category, sort } = req.query;
       
-      // For public feed, use a generic user ID or handle differently
       const userId = req.user?.userId || 'public';
 
-      // Generate cache key
       const cacheKey = `feed:${userId}:${category || 'all'}:${sort}:${cursor || 'initial'}:${limit}`;
       
-      // Try to get from cache first
       if (redisClient) {
         const cachedFeed = await redisClient.get(cacheKey);
         if (cachedFeed) {
@@ -72,22 +69,19 @@ router.get('/',
         }
       }
 
-      // Generate fresh feed
       const feedData = await generateFeed({
         userId,
         cursor,
         limit: parseInt(limit),
         category,
         sort,
-        includeAds: false // No ads for public feed
+        includeAds: false
       });
 
-      // Add signed thumbnails
       if (feedData.documents?.length > 0) {
         feedData.documents = await addSignedThumbnails(feedData.documents);
       }
 
-      // Cache for 5 minutes
       if (redisClient && feedData.documents.length > 0) {
         await redisClient.setEx(cacheKey, 300, JSON.stringify(feedData)); // 5 minutes TTL
       }
@@ -103,7 +97,7 @@ router.get('/',
   }
 );
 
-// Search documents (PUBLIC - no auth required)
+// Search documents 
 router.get('/search',
   rateLimitMiddleware('search'),
   [
@@ -127,10 +121,8 @@ router.get('/search',
       const { q, type, category, page, limit } = req.query;
       const userId = req.user?.userId || 'public';
 
-      // Generate cache key for search results
       const cacheKey = `search:${q}:${type}:${category || 'all'}:${page}:${limit}`;
       
-      // Try cache first
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
         if (cached) {
@@ -151,12 +143,10 @@ router.get('/search',
         userId
       });
 
-      // Add signed thumbnails to search results
       if (searchResults.documents?.length > 0) {
         searchResults.documents = await addSignedThumbnails(searchResults.documents);
       }
 
-      // Cache search results for 10 minutes
       if (redisClient && searchResults.documents.length > 0) {
         await redisClient.setEx(cacheKey, 600, JSON.stringify(searchResults));
       }
@@ -172,7 +162,7 @@ router.get('/search',
   }
 );
 
-// Get related documents (PUBLIC - no auth required)
+// Get related documents 
 router.get('/related/:documentId',
   [
     query('limit').optional().isInt({ min: 1, max: 20 }).default(10)
@@ -184,7 +174,6 @@ router.get('/related/:documentId',
 
       const relatedDocs = await getRelatedDocuments(documentId, parseInt(limit));
       
-      // Add signed thumbnails
       const docsWithThumbnails = await addSignedThumbnails(relatedDocs);
 
       res.json({
@@ -198,7 +187,7 @@ router.get('/related/:documentId',
   }
 );
 
-// Get trending documents (PUBLIC - no auth required)
+// Get trending documents 
 router.get('/trending',
   [
     query('timeframe').optional().isIn(['today', 'week', 'month']).default('week'),
@@ -209,7 +198,6 @@ router.get('/trending',
       const { timeframe, limit } = req.query;
       const cacheKey = `trending:${timeframe}:${limit}`;
 
-      // Try cache first
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
         if (cached) {
@@ -222,10 +210,8 @@ router.get('/trending',
 
       const trendingDocs = await getTrendingDocuments(timeframe, parseInt(limit));
       
-      // Add signed thumbnails
       const docsWithThumbnails = await addSignedThumbnails(trendingDocs);
 
-      // Cache for 15 minutes
       if (redisClient) {
         await redisClient.setEx(cacheKey, 900, JSON.stringify(docsWithThumbnails));
       }
@@ -241,7 +227,7 @@ router.get('/trending',
   }
 );
 
-// Get categories with counts (PUBLIC - no auth required)
+// Get categories with counts
 router.get('/categories',
   async (req, res, next) => {
     try {
@@ -259,7 +245,6 @@ router.get('/categories',
 
       const categories = await getCategoryCounts();
 
-      // Cache for 1 hour
       if (redisClient) {
         await redisClient.setEx(cacheKey, 3600, JSON.stringify(categories));
       }
@@ -275,9 +260,7 @@ router.get('/categories',
   }
 );
 
-// PRIVATE ROUTES (require authentication)
-
-// Get personalized feed (PRIVATE - requires auth)
+// Get personalized feed 
 router.get('/personalized',
   authMiddleware,
   rateLimitMiddleware('search'),
@@ -296,10 +279,8 @@ router.get('/personalized',
       const { cursor, limit, category, sort } = req.query;
       const userId = req.user.userId;
 
-      // Generate cache key
       const cacheKey = `feed:personalized:${userId}:${category || 'all'}:${sort}:${cursor || 'initial'}:${limit}`;
       
-      // Try to get from cache first
       if (redisClient) {
         const cachedFeed = await redisClient.get(cacheKey);
         if (cachedFeed) {
@@ -311,7 +292,6 @@ router.get('/personalized',
         }
       }
 
-      // Generate personalized feed with ads
       const feedData = await generateFeed({
         userId,
         cursor,
@@ -322,12 +302,10 @@ router.get('/personalized',
         personalized: true
       });
 
-      // Add signed thumbnails
       if (feedData.documents?.length > 0) {
         feedData.documents = await addSignedThumbnails(feedData.documents);
       }
 
-      // Cache for 3 minutes (shorter TTL for personalized content)
       if (redisClient && feedData.documents.length > 0) {
         await redisClient.setEx(cacheKey, 180, JSON.stringify(feedData));
       }
@@ -352,12 +330,10 @@ async function performSearch({ query, type, category, page, limit, userId }) {
     visibility: 'public'
   };
 
-  // Add category filter if specified
   if (category) {
     searchQuery.category = category;
   }
 
-  // Text search for keyword type
   if (type === 'keyword') {
     searchQuery.$text = { $search: query };
     
@@ -414,7 +390,6 @@ async function getRelatedDocuments(documentId, limit) {
     return [];
   }
 
-  // Find documents with similar tags or same category
   const relatedDocs = await Document.find({
     _id: { $ne: documentId },
     status: 'processed',
@@ -468,7 +443,6 @@ async function getTrendingDocuments(timeframe, limit) {
         createdAt: 1,
         'user.name': 1,
         'user._id': 1,
-        // Calculate trending score
         trendingScore: {
           $add: [
             { $multiply: ['$viewsCount', 1] },

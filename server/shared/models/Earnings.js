@@ -33,12 +33,12 @@ const earningsSchema = new mongoose.Schema({
     default: 'USD'
   },
   metadata: {
-    cpm: Number, // Cost per mille for ad views
-    sharePercentage: Number, // Revenue share percentage
-    viewDuration: Number, // View duration in seconds
-    adType: String, // Banner, interstitial, etc.
-    country: String, // User country for geo-based rates
-    deviceType: String // Mobile, desktop, etc.
+    cpm: Number, 
+    sharePercentage: Number, 
+    viewDuration: Number, 
+    adType: String,
+    country: String, 
+    deviceType: String 
   },
   calculatedAt: {
     type: Date,
@@ -52,7 +52,7 @@ const earningsSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound indexes for performance
+// indexes
 earningsSchema.index({ userId: 1, createdAt: -1 });
 earningsSchema.index({ documentId: 1, createdAt: -1 });
 earningsSchema.index({ type: 1, createdAt: -1 });

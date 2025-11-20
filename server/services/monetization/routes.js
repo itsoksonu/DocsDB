@@ -122,7 +122,6 @@ router.post('/payouts/request',
       const { amount } = req.body;
       const userId = req.user.userId;
 
-      // Check user's wallet balance
       const user = await User.findById(userId);
       if (!user) {
         return res.status(404).json({
@@ -138,7 +137,6 @@ router.post('/payouts/request',
         });
       }
 
-      // Check KYC status
       if (user.kycStatus !== 'verified') {
         return res.status(400).json({
           success: false,
@@ -146,7 +144,6 @@ router.post('/payouts/request',
         });
       }
 
-      // Check minimum payout amount
       if (amount < 50) {
         return res.status(400).json({
           success: false,
@@ -154,7 +151,6 @@ router.post('/payouts/request',
         });
       }
 
-      // Process payout
       const payoutResult = await processPayout(userId, amount);
 
       if (!payoutResult.success) {
@@ -265,7 +261,6 @@ router.post('/onboarding',
         });
       }
 
-      // Create Stripe Connect account
       const account = await stripe.accounts.create({
         type: 'express',
         country: 'US',
@@ -278,7 +273,6 @@ router.post('/onboarding',
         }
       });
 
-      // Create account link for onboarding
       const accountLink = await stripe.accountLinks.create({
         account: account.id,
         refresh_url: `${process.env.FRONTEND_URL}/monetization/onboarding/refresh`,
@@ -286,7 +280,6 @@ router.post('/onboarding',
         type: 'account_onboarding',
       });
 
-      // Update user with Stripe account ID
       await User.findByIdAndUpdate(userId, {
         $set: {
           'payoutDetails.stripeAccountId': account.id
@@ -323,7 +316,6 @@ router.get('/kyc-status',
         });
       }
 
-      // If user has Stripe account, check its status
       let stripeStatus = null;
       if (user.payoutDetails?.stripeAccountId) {
         try {
@@ -439,7 +431,6 @@ router.post('/admin/payouts/:payoutId/process',
         });
       }
 
-      // Process with Stripe
       try {
         const transfer = await stripe.transfers.create({
           amount: Math.round(payout.amount * 100), // Convert to cents
@@ -451,7 +442,6 @@ router.post('/admin/payouts/:payoutId/process',
           }
         });
 
-        // Update payout status
         payout.status = 'processing';
         payout.transactionId = transfer.id;
         await payout.save();
