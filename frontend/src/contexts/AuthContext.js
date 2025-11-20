@@ -1,4 +1,3 @@
-// src/contexts/AuthContext.js
 import { createContext, useContext, useEffect, useState } from "react";
 import { apiService } from "../services/api";
 
@@ -20,10 +19,9 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     checkAuth();
 
-    // Set up token refresh interval
     const interval = setInterval(() => {
       refreshTokenSilently();
-    }, 25 * 60 * 1000); // Refresh every 25 minutes
+    }, 25 * 60 * 1000);
 
     return () => clearInterval(interval);
   }, []);
@@ -33,10 +31,9 @@ export const AuthProvider = ({ children }) => {
       const token = localStorage.getItem("accessToken");
       if (token) {
         const response = await apiService.getCurrentUser();
-        setUser(response.data.user); // Fixed: response.data.user (getCurrentUser returns {success, data: {user}})
+        setUser(response.data.user);
       }
     } catch (error) {
-      // Token might be expired, try to refresh
       await refreshTokenSilently();
     } finally {
       setLoading(false);
@@ -69,20 +66,18 @@ export const AuthProvider = ({ children }) => {
 
   const handleGoogleOAuth = async (googleResponse) => {
     try {
-      // Extract the credential (JWT token) from the response
       const credential = googleResponse.credential;
 
       if (!credential) {
         throw new Error("No credential received from Google");
       }
 
-      // Decode the JWT to get user info (optional, for logging)
       const payload = JSON.parse(atob(credential.split(".")[1]));
 
       const oauthData = {
         provider: "google",
-        accessToken: credential, // This is the JWT token
-        providerId: payload.sub, // Use 'sub' as providerId
+        accessToken: credential, 
+        providerId: payload.sub, 
         email: payload.email,
         name: payload.name,
         avatar: payload.picture,

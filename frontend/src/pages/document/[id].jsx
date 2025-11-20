@@ -1,4 +1,3 @@
-// pages/document/[id].jsx
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
@@ -51,12 +50,10 @@ const DocumentViewerPage = () => {
       setLoading(true);
       setError(null);
 
-      // Get document details
       const docResponse = await apiService.client.get(`/documents/${id}`);
       const docData = docResponse.data.data.document;
       setDocument(docData);
 
-      // Get view URL
       const viewResponse = await apiService.client.get(`/documents/${id}/view`);
       setViewUrl(viewResponse.data.data.viewUrl);
     } catch (err) {

@@ -1,4 +1,3 @@
-// src/components/ui/Skeleton.jsx
 export const Skeleton = ({ className = '' }) => (
   <div className={`animate-pulse bg-dark-700 rounded-lg ${className}`} />
 );

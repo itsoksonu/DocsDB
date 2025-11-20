@@ -1,4 +1,3 @@
-// src/pages/upload.jsx
 import { useState, useRef } from "react";
 import Head from "next/head";
 import { useRouter } from "next/router";
@@ -27,12 +26,11 @@ export default function UploadPage() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState("idle"); // idle, uploading, processing, processed, error
+  const [uploadStatus, setUploadStatus] = useState("idle"); 
   const [documentId, setDocumentId] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
 
-  // Supported file types
   const ALLOWED_TYPES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -50,7 +48,6 @@ export default function UploadPage() {
     const file = event.target.files[0];
     if (!file) return;
 
-    // Validate file type
     if (!Object.keys(ALLOWED_TYPES).includes(file.type)) {
       toast.error(
         "Invalid file type. Please upload PDF, DOCX, PPTX, XLSX, or CSV files."
@@ -58,7 +55,6 @@ export default function UploadPage() {
       return;
     }
 
-    // Validate file size
     if (file.size > MAX_FILE_SIZE) {
       toast.error("File size exceeds 100MB limit.");
       return;
@@ -138,7 +134,6 @@ export default function UploadPage() {
         setErrorMessage(response.data.processingError || "Processing failed");
         toast.error("Document processing failed");
       } else if (status === "processing") {
-        // Keep polling
         setTimeout(() => checkProcessingStatus(docId), 3000);
       }
     } catch (error) {
@@ -155,7 +150,6 @@ export default function UploadPage() {
     setErrorMessage("");
 
     try {
-      // Step 1: Get presigned URL
       const presignResponse = await apiService.getPresignedUrl({
         fileName: selectedFile.name,
         fileType: selectedFile.type,
@@ -165,20 +159,17 @@ export default function UploadPage() {
       const { uploadUrl, documentId: docId, key } = presignResponse.data;
       setDocumentId(docId);
 
-      // Step 2: Upload to S3
       await uploadToS3(uploadUrl, selectedFile);
 
       setUploadProgress(100);
       toast.success("File uploaded successfully!");
 
-      // Step 3: Complete upload and start processing
       setUploadStatus("processing");
       await apiService.completeUpload({
         documentId: docId,
         key: key,
       });
 
-      // Step 4: Poll for processing status
       setTimeout(() => checkProcessingStatus(docId), 2000);
     } catch (error) {
       console.error("Upload error:", error);
@@ -210,7 +201,6 @@ export default function UploadPage() {
       <div className="min-h-screen bg-dark-950 text-white">
         <DesktopNavbar
           onSearch={(query) => {
-            // Add search functionality for upload page
             const trimmed = query.trim();
             if (trimmed && trimmed !== router.query.q) {
               router.push(`/search?q=${encodeURIComponent(trimmed)}`);

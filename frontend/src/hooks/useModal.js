@@ -1,4 +1,3 @@
-// src/hooks/useModal.js
 import { useCallback } from 'react';
 
 export const useModal = () => {

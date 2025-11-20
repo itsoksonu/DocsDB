@@ -1,4 +1,3 @@
-// src/services/api.js
 import axios from "axios";
 import toast from "react-hot-toast";
 
@@ -33,7 +32,7 @@ class APIService {
 
     this.client.interceptors.response.use(
       (response) => {
-        this.retryCount = 0; // Reset retry count on successful response
+        this.retryCount = 0; 
         return response;
       },
       async (error) => {
@@ -62,7 +61,7 @@ class APIService {
           }
         }
 
-        this.retryCount = 0; // Reset retry count
+        this.retryCount = 0;
 
         const message = error.response?.data?.message || "Something went wrong";
 
@@ -77,7 +76,7 @@ class APIService {
     );
   }
 
-  // OAuth login - Only method for authentication
+  //auth endpoints
   async oauthLogin(oauthData) {
     const response = await this.client.post("/oauth", oauthData);
     return response.data;
@@ -165,25 +164,22 @@ class APIService {
     return response.data;
   }
 
-  // Save document
+  // document Save related endpoints
   async saveDocument(documentId) {
     const response = await this.client.post(`/documents/${documentId}/save`);
     return response.data;
   }
 
-  // Unsave document
   async unsaveDocument(documentId) {
     const response = await this.client.delete(`/documents/${documentId}/save`);
     return response.data;
   }
 
-  // Get saved documents
   async getSavedDocuments(params = {}) {
     const response = await this.client.get("/documents/user/saved-documents", { params });
     return response.data;
   }
 
-  // Check if document is saved
   async checkSavedStatus(documentId) {
     const response = await this.client.get(
       `/documents/${documentId}/save/status`
@@ -191,6 +187,7 @@ class APIService {
     return response.data;
   }
 
+  // documents endpoints
   async getUserDocuments(params = {}) {
   const response = await this.client.get("/documents/user/my-documents", { params });
   return response.data;

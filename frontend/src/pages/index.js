@@ -1,4 +1,3 @@
-// src/pages/index.jsx
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
@@ -122,7 +121,6 @@ export default function Home() {
     loadDocuments();
   }, [selectedCategory]);
 
-  // Handle search by redirecting to search page
   const handleSearch = (query) => {
     const trimmed = query.trim();
     if (trimmed && trimmed !== router.query.q) {

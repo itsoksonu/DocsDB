@@ -1,4 +1,3 @@
-// DocumentCard.jsx - Updated with navigation
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { 
@@ -26,7 +25,6 @@ export const DocumentCard = ({ document }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [hasCheckedStatus, setHasCheckedStatus] = useState(false);
 
-  // Check save status only when dropdown is opened
   useEffect(() => {
     if (isDropdownOpen && !hasCheckedStatus) {
       checkSavedStatus();
@@ -44,7 +42,6 @@ export const DocumentCard = ({ document }) => {
   };
 
   const handleCardClick = (e) => {
-    // Don't navigate if clicking on dropdown or its trigger
     if (e.target.closest('.dropdown-trigger') || e.target.closest('.dropdown-menu')) {
       return;
     }
@@ -54,7 +51,6 @@ export const DocumentCard = ({ document }) => {
   const handleSaveToggle = async (e) => {
     e.stopPropagation();
     
-    // Check if user is logged in
     const token = localStorage.getItem("accessToken");
     if (!token) {
       toast.error("Please login to save documents");

@@ -1,4 +1,3 @@
-// src/hooks/useGoogleAuth.js
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
@@ -12,7 +11,6 @@ export const useGoogleAuth = () => {
         return;
       }
 
-      // Load Google OAuth script if not already loaded
       if (!document.querySelector('script[src*="accounts.google.com"]')) {
         const script = document.createElement('script');
         script.src = 'https://accounts.google.com/gsi/client';
@@ -27,7 +25,6 @@ export const useGoogleAuth = () => {
         };
         document.head.appendChild(script);
       } else {
-        // Script already exists, check if Google is available
         const checkGoogle = setInterval(() => {
           if (window.google?.accounts?.id) {
             setIsGoogleLoaded(true);
@@ -35,7 +32,6 @@ export const useGoogleAuth = () => {
           }
         }, 100);
 
-        // Timeout after 5 seconds
         setTimeout(() => {
           clearInterval(checkGoogle);
           if (!window.google?.accounts?.id) {
@@ -77,14 +73,12 @@ export const useGoogleAuth = () => {
 
     window.google.accounts.id.prompt((notification) => {
       if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-        // Fallback to regular OAuth flow
         triggerGoogleOAuthPopup();
       }
     });
   };
 
   const triggerGoogleOAuthPopup = () => {
-    // Fallback to traditional OAuth popup
     const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
     const redirectUri = process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI || `${window.location.origin}/auth/callback`;
     

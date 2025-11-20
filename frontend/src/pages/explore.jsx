@@ -1,4 +1,3 @@
-// src/pages/explore.jsx
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
@@ -83,7 +82,6 @@ export default function Explore() {
 
   const handleCategoryChange = (categoryId) => {
     setSelectedCategory(categoryId);
-    // Update URL without page reload
     router.push(`/explore${categoryId !== 'all' ? `?category=${categoryId}` : ''}`, undefined, { shallow: true });
   };
 

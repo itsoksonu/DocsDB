@@ -1,4 +1,3 @@
-// src/components/layout/DesktopNavbar.jsx
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -29,9 +28,8 @@ export const DesktopNavbar = ({
   const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState(false);
 
   useEffect(() => {
-    // Check if screen is desktop size
     const checkScreenSize = () => {
-      setIsDesktop(window.innerWidth >= 768); // md breakpoint
+      setIsDesktop(window.innerWidth >= 768);
     };
 
     checkScreenSize();
@@ -45,7 +43,6 @@ export const DesktopNavbar = ({
       const scrollPosition = window.scrollY;
       setScrolled(scrollPosition > 20);
 
-      // Show search bar in navbar only on desktop when scrolled past hero section (roughly 400px)
       if (isDesktop) {
         setShowNavSearch(scrollPosition > 400);
       } else {
@@ -53,12 +50,11 @@ export const DesktopNavbar = ({
       }
     };
 
-    handleScroll(); // Call once on mount
+    handleScroll(); 
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, [isDesktop]);
 
-  // Default search handler
   const defaultSearchHandler = (query) => {
     const trimmed = query.trim();
     if (trimmed && trimmed !== router.query.q) {
@@ -66,7 +62,6 @@ export const DesktopNavbar = ({
     }
   };
 
-  // Use provided onSearch or default handler
   const handleSearch = onSearch || defaultSearchHandler;
 
   const handleLogout = async () => {

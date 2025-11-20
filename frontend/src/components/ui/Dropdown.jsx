@@ -1,7 +1,5 @@
-// src/components/ui/Dropdown.jsx
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown } from 'lucide-react';
 
 export const Dropdown = ({ 
   trigger, 
@@ -38,23 +36,17 @@ export const Dropdown = ({
       let horizontal = align;
       let vertical = 'bottom';
 
-      // Check horizontal positioning
       if (align === 'right') {
-        // Check if dropdown goes off right edge
         if (dropdown.right < content.width) {
           horizontal = 'left';
         }
       } else {
-        // Check if dropdown goes off left edge
         if (dropdown.left + content.width > viewport.width) {
           horizontal = 'right';
         }
       }
 
-      // Check vertical positioning
-      // Check if there's enough space below
       if (dropdown.bottom + content.height > viewport.height) {
-        // Check if there's more space above
         if (dropdown.top > viewport.height - dropdown.bottom) {
           vertical = 'top';
         }
@@ -67,14 +59,12 @@ export const Dropdown = ({
   const getPositionClasses = () => {
     const classes = [];
     
-    // Horizontal alignment
     if (position.horizontal === 'left') {
       classes.push('left-0');
     } else {
       classes.push('right-0');
     }
 
-    // Vertical alignment
     if (position.vertical === 'top') {
       classes.push('bottom-full mb-2');
     } else {

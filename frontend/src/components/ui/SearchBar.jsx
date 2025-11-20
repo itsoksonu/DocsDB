@@ -1,4 +1,3 @@
-// src/components/ui/SearchBar.jsx
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Search, X } from '../../icons';

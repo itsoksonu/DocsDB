@@ -24,7 +24,6 @@ const ProfilePage = () => {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [savedLoading, setSavedLoading] = useState(false);
 
-  // Check URL for tab parameter
   useEffect(() => {
     if (router.query.tab === 'saved') {
       setActiveTab('saved');
@@ -33,7 +32,6 @@ const ProfilePage = () => {
     }
   }, [router.query.tab]);
 
-  // Initialize form data when user loads
   useEffect(() => {
     if (user) {
       setFormData({
@@ -43,7 +41,6 @@ const ProfilePage = () => {
     }
   }, [user]);
 
-  // Load documents based on active tab
   useEffect(() => {
     if (user) {
       loadDocuments();
@@ -97,7 +94,6 @@ const ProfilePage = () => {
 
   const handleEditToggle = () => {
     if (editing) {
-      // Reset form data when canceling
       setFormData({
         name: user.name || '',
         avatar: user.avatar || ''
