@@ -1,7 +1,7 @@
 import express from "express";
 import { param, query, validationResult } from "express-validator";
 import mongoose from "mongoose";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
 import { trackView } from "../../shared/utils/analytics.js";
@@ -34,7 +34,7 @@ async function addSignedThumbnails(documents) {
 // Get document by ID
 router.get(
   "/:id",
-  authMiddleware,
+  optionalAuthMiddleware,
   [param("id").isMongoId()],
   async (req, res, next) => {
     try {
@@ -47,7 +47,7 @@ router.get(
       }
 
       const { id } = req.params;
-      const userId = req.user.userId;
+      const userId = req.user?.userId;
 
       const document = await Document.findById(id).populate("userId", "name");
 
@@ -58,7 +58,12 @@ router.get(
         });
       }
 
-      if (!document.isViewable() && document.userId._id.toString() !== userId) {
+      // Check permissions:
+      // 1. If document is viewable (public), allow access
+      // 2. If document is private, user must be the owner
+      const isOwner = userId && document.userId._id.toString() === userId;
+
+      if (!document.isViewable() && !isOwner) {
         return res.status(403).json({
           success: false,
           message: "You do not have permission to view this document",
@@ -82,7 +87,7 @@ router.get(
 // Get document content for viewing
 router.get(
   "/:id/view",
-  authMiddleware,
+  optionalAuthMiddleware,
   [param("id").isMongoId(), query("page").optional().isInt({ min: 1 })],
   async (req, res, next) => {
     try {
@@ -96,7 +101,7 @@ router.get(
 
       const { id } = req.params;
       const { page } = req.query;
-      const userId = req.user.userId;
+      const userId = req.user?.userId;
 
       const document = await Document.findById(id);
 
@@ -107,7 +112,9 @@ router.get(
         });
       }
 
-      if (!document.isViewable() && document.userId.toString() !== userId) {
+      const isOwner = userId && document.userId.toString() === userId;
+
+      if (!document.isViewable() && !isOwner) {
         return res.status(403).json({
           success: false,
           message: "You do not have permission to view this document",
@@ -122,7 +129,7 @@ router.get(
           viewUrl = await S3Manager.generateDownloadUrl(
             document.s3Path,
             document.originalFilename,
-            3600 
+            3600
           );
         }
       } catch (error) {
@@ -328,7 +335,7 @@ router.delete(
 // Get document analytics
 router.get(
   "/:id/analytics",
-  authMiddleware,
+  optionalAuthMiddleware,
   [param("id").isMongoId()],
   async (req, res, next) => {
     try {
@@ -341,10 +348,20 @@ router.get(
       }
 
       const { id } = req.params;
-      const userId = req.user.userId;
+      const userId = req.user?.userId;
 
-      const document = await Document.findOne({ _id: id, userId });
+      const document = await Document.findById(id);
+
       if (!document) {
+        return res.status(404).json({
+          success: false,
+          message: "Document not found",
+        });
+      }
+
+      const isOwner = userId && document.userId.toString() === userId;
+
+      if (!document.isViewable() && !isOwner) {
         return res.status(404).json({
           success: false,
           message: "Document not found or access denied",
