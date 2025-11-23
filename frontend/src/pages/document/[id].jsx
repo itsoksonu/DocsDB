@@ -5,11 +5,11 @@ import Link from "next/link";
 import { useAuth } from "../../contexts/AuthContext";
 import { apiService } from "../../services/api";
 import { DesktopNavbar } from "../../components/layout/DesktopNavbar";
-// Added ChevronDown and ChevronUp to imports
-import { Download, Eye, Bookmark, BookmarkCheck, Share2, Calendar, FileText, ChevronLeft, ChevronDown, ChevronUp, AlertCircle } from "../../icons";
+import { Download, Eye, Bookmark, BookmarkCheck, Share2, Calendar, FileText, ChevronLeft, ChevronDown, ChevronUp, AlertCircle, Maximize2 } from "../../icons";
 import toast from "react-hot-toast";
 import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
+import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton"; 
 
 const DocumentViewerPage = () => {
   const router = useRouter();
@@ -23,9 +23,9 @@ const DocumentViewerPage = () => {
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [relatedDocs, setRelatedDocs] = useState([]);
-  
-  // NEW: State for mobile expand/collapse behavior
   const [showMobileDetails, setShowMobileDetails] = useState(false);
+  const [csvData, setCsvData] = useState([]);
+  const [csvLoading, setCsvLoading] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -38,7 +38,10 @@ const DocumentViewerPage = () => {
     if (document && user) {
       checkSavedStatus();
     }
-  }, [document, user]);
+    if (document?.fileType === 'csv' && viewUrl) {
+      fetchCsvContent();
+    }
+  }, [document, user, viewUrl]);
 
   const loadDocument = async () => {
     try {
@@ -60,11 +63,30 @@ const DocumentViewerPage = () => {
     }
   };
 
+  const fetchCsvContent = async () => {
+    try {
+      setCsvLoading(true);
+      const response = await fetch(viewUrl);
+      const text = await response.text();
+      
+      // Simple CSV parser (split by newlines, then commas)
+      const rows = text.split('\n')
+        .map(row => row.split(','))
+        .filter(row => row.some(cell => cell.trim() !== ''));
+
+      setCsvData(rows);
+    } catch (error) {
+      console.error("Error fetching CSV:", error);
+      toast.error("Failed to load CSV preview");
+    } finally {
+      setCsvLoading(false);
+    }
+  };
+
   const loadRelatedDocuments = async () => {
     try {
       const response = await apiService.getRelatedDocuments(id, 6);
       const docs = response.data?.data || response.data || [];
-
       if (Array.isArray(docs)) {
         setRelatedDocs(docs);
       } else {
@@ -89,7 +111,6 @@ const DocumentViewerPage = () => {
       toast.error("Please login to save documents");
       return;
     }
-
     if (isSaving) return;
 
     setIsSaving(true);
@@ -120,7 +141,6 @@ const DocumentViewerPage = () => {
 
   const handleShare = async () => {
     const shareUrl = window.location.href;
-
     if (navigator.share) {
       try {
         await navigator.share({
@@ -151,13 +171,119 @@ const DocumentViewerPage = () => {
     });
   };
 
+  const getViewerUrl = () => {
+    if (!viewUrl) return null;
+
+    const type = document.fileType?.toLowerCase();
+    const encodedUrl = encodeURIComponent(viewUrl);
+
+    if (['xlsx', 'xls', 'doc', 'docx', 'ppt', 'pptx'].includes(type)) {
+      return `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
+    }
+
+    if (type === 'pdf') {
+      return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
+    }
+
+    return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
+  };
+
+  // --- Custom CSV Renderer Component ---
+  const renderCsvPreview = () => {
+    if (csvLoading) {
+      return (
+        <div className="w-full h-full flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        </div>
+      );
+    }
+
+    if (csvData.length === 0) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center text-dark-400 p-6">
+          <FileText size={48} className="mb-4" />
+          <p className="mb-2">No preview data available</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-full h-full overflow-auto bg-white text-black p-4">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="bg-gray-100 border-b border-gray-300">
+              {csvData[0]?.map((header, i) => (
+                <th key={i} className="p-2 text-left font-semibold border-r border-gray-200 min-w-[100px]">
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {csvData.slice(1).map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-b border-gray-100 hover:bg-blue-50">
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex} className="p-2 border-r border-gray-100 truncate max-w-[200px]" title={cell}>
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderViewer = () => {
+    const type = document.fileType?.toLowerCase();
+
+    // 1. Handle CSV natively
+    if (type === 'csv') {
+      return renderCsvPreview();
+    }
+
+    // 2. Handle others via Iframe
+    const viewerSrc = getViewerUrl();
+
+    if (!viewerSrc) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center text-dark-400 p-6">
+          <FileText size={48} className="mb-4" />
+          <p className="mb-2 text-lg font-semibold">Preview not available</p>
+          <button
+            onClick={handleDownload}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
+          >
+            <Download size={16} />
+            Download to view
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <iframe
+        src={viewerSrc}
+        className="w-full h-full bg-white"
+        title={document.generatedTitle}
+        frameBorder="0"
+      />
+    );
+  };
+
+  const handleFullScreen = () => {
+    if (viewUrl) {
+      window.open(viewUrl, "_blank");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-dark-950 text-white">
         <DesktopNavbar />
-        <div className="pt-24 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-        </div>
+        <DocumentViewerSkeleton />
+        <Footer />
       </div>
     );
   }
@@ -171,8 +297,7 @@ const DocumentViewerPage = () => {
             <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
             <h1 className="text-2xl font-bold mb-2">Document Not Found</h1>
             <p className="text-dark-300 mb-6">
-              {error ||
-                "The document you're looking for doesn't exist or has been removed."}
+              {error || "The document you're looking for doesn't exist or has been removed."}
             </p>
             <Link
               href="/"
@@ -202,7 +327,6 @@ const DocumentViewerPage = () => {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Left Column - Info & Stats */}
               <div className="lg:col-span-3 space-y-6">
-                {/* Back Button */}
                 <button
                   onClick={() => router.back()}
                   className="flex items-center gap-2 text-dark-300 hover:text-white transition-colors text-sm mb-2"
@@ -211,7 +335,6 @@ const DocumentViewerPage = () => {
                   Back
                 </button>
 
-                {/* Document Info Header */}
                 <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl p-4 border border-dark-800/50">
                   <div className="flex items-center gap-2 mb-3">
                     <span className="px-2 py-1 bg-dark-800 rounded text-xs font-medium text-dark-300 uppercase">
@@ -227,7 +350,6 @@ const DocumentViewerPage = () => {
                     {document.generatedTitle}
                   </h1>
                   
-                  {/* UPDATED: Conditional class for mobile clamping */}
                   {document.generatedDescription && (
                     <p 
                       className={`text-dark-300 text-sm leading-relaxed mb-4 ${
@@ -238,7 +360,6 @@ const DocumentViewerPage = () => {
                     </p>
                   )}
 
-                  {/* Action Buttons */}
                   <div className="flex flex-col gap-2">
                     <button
                       onClick={handleDownload}
@@ -257,11 +378,7 @@ const DocumentViewerPage = () => {
                             : "bg-dark-800 hover:bg-dark-700 text-white"
                         }`}
                       >
-                        {isSaved ? (
-                          <BookmarkCheck size={16} />
-                        ) : (
-                          <Bookmark size={16} />
-                        )}
+                        {isSaved ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}
                         {isSaved ? "Saved" : "Save"}
                       </button>
                       <button
@@ -274,35 +391,25 @@ const DocumentViewerPage = () => {
                     </div>
                   </div>
 
-                  {/* NEW: Mobile Toggle Button */}
                   <button
                     onClick={() => setShowMobileDetails(!showMobileDetails)}
                     className="lg:hidden w-full mt-4 pt-2 border-t border-dark-800/50 text-dark-400 hover:text-white text-xs font-medium flex items-center justify-center gap-1 transition-colors"
                   >
                     {showMobileDetails ? (
-                      <>
-                        Show Less <ChevronUp size={14} />
-                      </>
+                      <>Show Less <ChevronUp size={14} /></>
                     ) : (
-                      <>
-                        Show Details <ChevronDown size={14} />
-                      </>
+                      <>Show Details <ChevronDown size={14} /></>
                     )}
                   </button>
                 </div>
 
-                {/* Document Stats (Details Card) */}
-                <div 
-                  className={`bg-dark-900/50 backdrop-blur-sm rounded-xl p-4 border border-dark-800/50 ${
+                <div className={`bg-dark-900/50 backdrop-blur-sm rounded-xl p-4 border border-dark-800/50 ${
                     !showMobileDetails ? 'hidden lg:block' : 'block'
-                  }`}
-                >
+                  }`}>
                   <h2 className="text-sm font-semibold mb-4 text-dark-200 uppercase tracking-wider">
                     Details
                   </h2>
-
                   <div className="space-y-4">
-                    {/* Uploader */}
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white text-xs font-medium flex-shrink-0">
                         {document.userId?.avatar ? (
@@ -325,12 +432,9 @@ const DocumentViewerPage = () => {
 
                     <div className="h-px bg-dark-800/50" />
 
-                    {/* Stats Grid */}
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <p className="text-xs text-dark-400 mb-1">
-                          Upload date
-                        </p>
+                        <p className="text-xs text-dark-400 mb-1">Upload date</p>
                         <div className="flex items-center gap-2 text-sm text-white">
                           <Calendar size={14} className="text-dark-400" />
                           {formatDate(document.createdAt)}
@@ -361,7 +465,6 @@ const DocumentViewerPage = () => {
                       )}
                     </div>
 
-                    {/* Tags */}
                     {document.tags && document.tags.length > 0 && (
                       <>
                         <div className="h-px bg-dark-800/50" />
@@ -386,44 +489,20 @@ const DocumentViewerPage = () => {
 
               {/* Middle Column - Document Viewer */}
               <div className="lg:col-span-6">
-                <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl border border-dark-800/50 overflow-hidden sticky top-24">
+                <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl border border-dark-800/50 overflow-hidden sticky top-24 relative group">
+                  {/* Top Action Bar for Viewer */}
+                  <div className="absolute top-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button 
+                      onClick={handleFullScreen}
+                      className="bg-dark-900/80 p-2 rounded-lg text-white hover:bg-blue-600 transition-colors backdrop-blur-sm border border-dark-700 shadow-lg"
+                      title="Open in new tab"
+                    >
+                      <Maximize2 size={20} />
+                    </button>
+                  </div>
+
                   <div className="aspect-[8.5/11] w-full bg-dark-800">
-                    {viewUrl && typeof viewUrl === "string" ? (
-                      document.fileType === "pdf" ? (
-                        <iframe
-                          src={viewUrl}
-                          className="w-full h-full"
-                          title={document.generatedTitle}
-                          type="application/pdf"
-                        />
-                      ) : (
-                        <iframe
-                          src={`https://docs.google.com/viewer?url=${encodeURIComponent(
-                            viewUrl
-                          )}&embedded=true`}
-                          className="w-full h-full"
-                          title={document.generatedTitle}
-                        />
-                      )
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center text-dark-400 p-6">
-                        <FileText size={48} className="mb-4" />
-                        <p className="mb-2 text-lg font-semibold">
-                          Preview not available
-                        </p>
-                        <p className="mb-6 text-sm text-center text-dark-500">
-                          The document preview couldn't be loaded. Please
-                          download to view.
-                        </p>
-                        <button
-                          onClick={handleDownload}
-                          className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
-                        >
-                          <Download size={16} />
-                          Download to view
-                        </button>
-                      </div>
-                    )}
+                    {renderViewer()}
                   </div>
                 </div>
               </div>
@@ -435,8 +514,6 @@ const DocumentViewerPage = () => {
                     <h2 className="text-sm font-semibold mb-4 text-dark-200 uppercase tracking-wider">
                       Related Documents
                     </h2>
-
-                    {/* Updated container for Cards */}
                     <div className="flex flex-wrap gap-4 justify-center">
                       {relatedDocs.map((doc) => (
                         <DocumentCard key={doc._id} document={doc} />
@@ -449,8 +526,6 @@ const DocumentViewerPage = () => {
           </div>
         </div>
       </div>
-
-      {/* Footer */}
       <Footer />
     </>
   );

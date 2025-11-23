@@ -71,6 +71,11 @@ const Footer = () => {
                   Copyright
                 </Link>
               </li>
+              <li>
+                <Link href="/dmca" className="hover:text-white transition-colors">
+                  DMCA
+                </Link>
+              </li>
             </ul>
           </div>
         </div>
