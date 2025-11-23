@@ -4,8 +4,8 @@
   "description": "Document Sharing & Monetization Platform",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
   "icons": [
     {
       "src": "/android-launchericon-192-192.png",
