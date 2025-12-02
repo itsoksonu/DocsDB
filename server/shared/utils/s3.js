@@ -1,8 +1,8 @@
-import { 
-  S3Client, 
-  PutObjectCommand, 
-  GetObjectCommand, 
-  DeleteObjectCommand, 
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
   HeadObjectCommand 
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -18,7 +18,7 @@ class S3Manager {
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
       }
     });
-    
+
     this.bucketName = process.env.S3_BUCKET_NAME;
   }
 
@@ -127,11 +127,32 @@ class S3Manager {
     }
   }
 
+  async getObjectBuffer(key) {
+    try {
+      const data = await this.getObject(key); 
+
+      if (!data || !data.Body) {
+        throw new Error("S3: No Body returned for key " + key);
+      }
+
+      if (Buffer.isBuffer(data.Body)) {
+        return data.Body;
+      }
+
+      const chunks = [];
+      for await (const chunk of data.Body) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    } catch (error) {
+      logger.error("Error in getObjectBuffer:", error);
+      throw error;
+    }
+  }
+
   generateFileKey(userId, originalFilename) {
     const extension = originalFilename.split('.').pop();
     const timestamp = Date.now();
     const uniqueId = uuidv4();
-    
+
     return `uploads/${userId}/${timestamp}-${uniqueId}.${extension}`;
   }
 
@@ -139,7 +160,7 @@ class S3Manager {
   isValidFileType(mimeType, originalFilename) {
     const allowedTypes = process.env.ALLOWED_FILE_TYPES?.split(',') || [];
     const extension = originalFilename.split('.').pop().toLowerCase();
-    
+
     const typeMap = {
       'pdf': 'application/pdf',
       'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -154,7 +175,7 @@ class S3Manager {
 
   // Validate file size
   isValidFileSize(sizeBytes) {
-    const maxSize = parseInt(process.env.MAX_FILE_SIZE) || 104857600; // 100MB 
+    const maxSize = parseInt(process.env.MAX_FILE_SIZE) || 104857600; // 100MB
     return sizeBytes <= maxSize;
   }
 }
