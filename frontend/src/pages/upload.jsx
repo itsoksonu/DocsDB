@@ -127,7 +127,7 @@ export default function UploadPage() {
         setUploadStatus("processed");
         toast.success("Document processed successfully!");
         setTimeout(() => {
-          router.push("/");
+          router.push("/profile?tab=uploaded");
         }, 2000);
       } else if (status === "failed") {
         setUploadStatus("error");
