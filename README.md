@@ -86,6 +86,20 @@ S3_BUCKET_NAME=your-bucket-name
 # Security
 JWT_SECRET=your-jwt-secret
 JWT_EXPIRES_IN=7d
+JWT_REFRESH_SECRET=your-jwt-refresh-secret
+BCRYPT_SALT_ROUNDS=12
+
+# OAuth2 Configuration
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=
+
+# AI Services
+GEMINI_API_KEY=
+GROQ_API_KEY=
+
+# External Services
+VIRUSTOTAL_API_KEY=
 
 # Rate Limiting
 RATE_LIMIT_WINDOW_MS=900000
@@ -142,4 +156,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 This project is licensed under the MIT License.
+
 
