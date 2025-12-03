@@ -1,5 +1,6 @@
 import { tmpdir } from "os";
 import { join, dirname } from "path";
+import path from "path";
 import { fileURLToPath } from "url";
 import { promisify } from "util";
 import { exec } from "child_process";
@@ -10,10 +11,22 @@ import { createRequire } from "module";
 import { GoogleGenAI } from "@google/genai";
 import { HfInference } from "@huggingface/inference";
 import Groq from "groq-sdk";
-import { createCanvas } from "canvas";
 
 const require = createRequire(import.meta.url);
 const execAsync = promisify(exec);
+
+const rawPdfParse = require("pdf-parse");
+const pdfParse =
+  typeof rawPdfParse === "function"
+    ? rawPdfParse
+    : rawPdfParse?.default || rawPdfParse?.pdfParse;
+
+logger.info("pdf-parse typeof", { type: typeof pdfParse });
+
+const { PDFDocument } = require("pdf-lib");
+const Tesseract = require("tesseract.js");
+import { pdfToImg } from "pdftoimg-js";
+import { Jimp } from "jimp";
 
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -27,13 +40,9 @@ const huggingface = HUGGINGFACE_TOKEN
   : null;
 const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null;
 
-let pdfParse, mammoth, XLSX;
+let mammoth, XLSX;
 
 async function ensureDependencies() {
-  if (!pdfParse) {
-    const pdfModule = await import("pdf-parse");
-    pdfParse = pdfModule.default || pdfModule;
-  }
   if (!mammoth) {
     mammoth = (await import("mammoth")).default;
   }
@@ -44,30 +53,6 @@ async function ensureDependencies() {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-class NodeCanvasFactory {
-  create(width, height) {
-    const canvas = createCanvas(width, height);
-    const context = canvas.getContext("2d");
-    return {
-      canvas: canvas,
-      context: context,
-    };
-  }
-
-  reset(canvasAndContext, width, height) {
-    canvasAndContext.canvas.width = width;
-    canvasAndContext.canvas.height = height;
-    canvasAndContext.canvas.style = {};
-  }
-
-  destroy(canvasAndContext) {
-    canvasAndContext.canvas.width = 0;
-    canvasAndContext.canvas.height = 0;
-    canvasAndContext.canvas = null;
-    canvasAndContext.context = null;
-  }
-}
 
 export async function processDocument(documentId, s3Key) {
   const document = await Document.findById(documentId);
@@ -95,7 +80,11 @@ export async function processDocument(documentId, s3Key) {
       throw new Error("No content extracted from document");
     }
 
-    const pageCount = await getAccuratePageCount(filePath, document.fileType, content);
+    const pageCount = await getAccuratePageCount(
+      filePath,
+      document.fileType,
+      content
+    );
 
     const metadata = await generateEnhancedMetadata(
       content,
@@ -141,13 +130,13 @@ export async function processDocument(documentId, s3Key) {
 async function performVirusScan(s3Key) {
   try {
     logger.info(`Starting virus scan for: ${s3Key}`);
-    
+
     const vtApiKey = process.env.VIRUSTOTAL_API_KEY;
     if (!vtApiKey) {
       logger.warn("⚠️ VirusTotal API key not configured, using basic validation");
       return await performBasicFileValidation(s3Key);
     }
-    
+
     return await scanWithVirusTotal(s3Key, vtApiKey);
   } catch (error) {
     logger.error(`Virus scan failed for ${s3Key}:`, error);
@@ -160,143 +149,147 @@ async function scanWithVirusTotal(s3Key, apiKey) {
   try {
     const fileBuffer = await S3Manager.getObjectBuffer(s3Key);
     const fileSize = fileBuffer.length;
-    
+
     // VirusTotal has a 32MB limit for direct uploads
     if (fileSize > 32 * 1024 * 1024) {
       logger.warn(`File too large for VirusTotal (${fileSize} bytes), using basic validation`);
       return await performBasicFileValidation(s3Key);
     }
-    
-    const FormData = (await import('form-data')).default;
+
+    const FormData = (await import("form-data")).default;
     const form = new FormData();
-    const filename = s3Key.split('/').pop();
-    form.append('file', fileBuffer, {
+    const filename = s3Key.split("/").pop();
+    form.append("file", fileBuffer, {
       filename: filename,
-      contentType: 'application/octet-stream'
+      contentType: "application/octet-stream",
     });
-    
+
     // Upload file to VirusTotal
-    logger.info('📤 Uploading file to VirusTotal...');
-    
-    // Use node-fetch or axios for proper FormData handling
-    // Since we're using fetch, we need to handle the stream properly
+    logger.info("📤 Uploading file to VirusTotal...");
+
+    // Use node https + form pipe
     const uploadResponse = await new Promise((resolve, reject) => {
       const options = {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'x-apikey': apiKey,
-          ...form.getHeaders()
-        }
+          "x-apikey": apiKey,
+          ...form.getHeaders(),
+        },
       };
-      
-      const https = require('https');
-      const req = https.request('https://www.virustotal.com/api/v3/files', options, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          resolve({
-            ok: res.statusCode >= 200 && res.statusCode < 300,
-            status: res.statusCode,
-            text: () => Promise.resolve(data),
-            json: () => Promise.resolve(JSON.parse(data))
+
+      const https = require("https");
+      const req = https.request(
+        "https://www.virustotal.com/api/v3/files",
+        options,
+        (res) => {
+          let data = "";
+          res.on("data", (chunk) => (data += chunk));
+          res.on("end", () => {
+            resolve({
+              ok: res.statusCode >= 200 && res.statusCode < 300,
+              status: res.statusCode,
+              text: () => Promise.resolve(data),
+              json: () => Promise.resolve(JSON.parse(data)),
+            });
           });
-        });
-      });
-      
-      req.on('error', reject);
+        }
+      );
+
+      req.on("error", reject);
       form.pipe(req);
     });
-    
+
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
       logger.error(`VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`);
       throw new Error(`VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`);
     }
-    
+
     const uploadData = await uploadResponse.json();
     const analysisId = uploadData.data.id;
-    
+
     logger.info(`✓ File uploaded. Analysis ID: ${analysisId}`);
-    
+
     // Poll for analysis results with exponential backoff
     let attempts = 0;
     const maxAttempts = 15;
     let waitTime = 2000; // Start with 2 seconds
-    
+
     while (attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+
       logger.info(`🔍 Checking analysis status (attempt ${attempts + 1}/${maxAttempts})...`);
-      
+
       const analysisResponse = await fetch(
         `https://www.virustotal.com/api/v3/analyses/${analysisId}`,
         {
-          headers: { 'x-apikey': apiKey },
+          headers: { "x-apikey": apiKey },
         }
       );
-      
+
       if (!analysisResponse.ok) {
         throw new Error(`Failed to fetch analysis: ${analysisResponse.status}`);
       }
-      
+
       const analysisData = await analysisResponse.json();
       const status = analysisData.data.attributes.status;
-      
-      if (status === 'completed') {
+
+      if (status === "completed") {
         const stats = analysisData.data.attributes.stats;
         const malicious = stats.malicious || 0;
         const suspicious = stats.suspicious || 0;
         const undetected = stats.undetected || 0;
         const harmless = stats.harmless || 0;
-        
-        logger.info(`📊 Scan results: Malicious: ${malicious}, Suspicious: ${suspicious}, Harmless: ${harmless}, Undetected: ${undetected}`);
-        
+
+        logger.info(
+          `📊 Scan results: Malicious: ${malicious}, Suspicious: ${suspicious}, Harmless: ${harmless}, Undetected: ${undetected}`
+        );
+
         // Strict detection: Any malicious or more than 2 suspicious flags
         if (malicious > 0 || suspicious > 2) {
           logger.error(`🚨 THREAT DETECTED in ${s3Key}`);
           return {
             clean: false,
-            scanner: 'virustotal',
+            scanner: "virustotal",
             scannedAt: new Date(),
             details: `Detected by ${malicious} engines as malicious (${suspicious} flagged as suspicious)`,
-            threat: malicious > 0 ? 'Malware detected' : 'Suspicious content detected',
+            threat: malicious > 0 ? "Malware detected" : "Suspicious content detected",
             vtResults: stats,
             analysisId: analysisId,
           };
         }
-        
+
         logger.info(`✅ VirusTotal scan completed: ${s3Key} is CLEAN`);
         return {
           clean: true,
-          scanner: 'virustotal',
+          scanner: "virustotal",
           scannedAt: new Date(),
           details: `Scanned by ${harmless + undetected} engines - Clean`,
           vtResults: stats,
           analysisId: analysisId,
         };
       }
-      
+
       // Exponential backoff: increase wait time
       waitTime = Math.min(waitTime * 1.5, 10000); // Max 10 seconds
       attempts++;
     }
-    
+
     // Timeout reached - be cautious
-    logger.warn('⏱️ VirusTotal scan timeout - flagging for manual review');
+    logger.warn("⏱️ VirusTotal scan timeout - flagging for manual review");
     return {
       clean: false,
-      scanner: 'virustotal',
+      scanner: "virustotal",
       scannedAt: new Date(),
-      details: 'Scan timeout - requires manual review',
-      threat: 'Unable to complete scan',
-      warning: 'MANUAL_REVIEW_REQUIRED',
+      details: "Scan timeout - requires manual review",
+      threat: "Unable to complete scan",
+      warning: "MANUAL_REVIEW_REQUIRED",
     };
-    
   } catch (error) {
-    logger.error('❌ VirusTotal scan error:', {
+    logger.error("❌ VirusTotal scan error:", {
       message: error.message,
       stack: error.stack,
-      s3Key: s3Key
+      s3Key: s3Key,
     });
     // Fallback to basic validation
     return await performBasicFileValidation(s3Key);
@@ -306,13 +299,13 @@ async function scanWithVirusTotal(s3Key, apiKey) {
 async function performBasicFileValidation(s3Key) {
   const fileBuffer = await S3Manager.getObjectBuffer(s3Key);
   const fileExtension = s3Key.split(".").pop().toLowerCase();
-  
+
   // 1. Block dangerous extensions
   const dangerousExtensions = [
     "exe", "bat", "cmd", "scr", "pif", "com", "vbs", "js", "jar", 
     "wsf", "msi", "app", "deb", "rpm", "dmg", "pkg", "run", "bin"
   ];
-  
+
   if (dangerousExtensions.includes(fileExtension)) {
     return {
       clean: false,
@@ -322,7 +315,7 @@ async function performBasicFileValidation(s3Key) {
       threat: "Executable file type blocked",
     };
   }
-  
+
   // 2. Validate file size
   if (fileBuffer.length === 0) {
     return {
@@ -333,7 +326,7 @@ async function performBasicFileValidation(s3Key) {
       threat: "Invalid file",
     };
   }
-  
+
   if (fileBuffer.length > 50 * 1024 * 1024) {
     return {
       clean: false,
@@ -343,7 +336,7 @@ async function performBasicFileValidation(s3Key) {
       threat: "File too large",
     };
   }
-  
+
   // 3. Check file signature (magic numbers)
   const isValidFileType = validateFileSignature(fileBuffer, fileExtension);
   if (!isValidFileType) {
@@ -355,15 +348,15 @@ async function performBasicFileValidation(s3Key) {
       threat: "Potential file spoofing",
     };
   }
-  
+
   // 4. Scan for suspicious patterns
   const suspiciousPatterns = [
-    Buffer.from('eval('),
-    Buffer.from('<script'),
-    Buffer.from('<?php'),
-    Buffer.from('#!/bin/'),
+    Buffer.from("eval("),
+    Buffer.from("<script"),
+    Buffer.from("<?php"),
+    Buffer.from("#!/bin/"),
   ];
-  
+
   for (const pattern of suspiciousPatterns) {
     if (fileBuffer.includes(pattern)) {
       logger.warn(`Suspicious pattern found in ${s3Key}`);
@@ -376,7 +369,7 @@ async function performBasicFileValidation(s3Key) {
       };
     }
   }
-  
+
   return {
     clean: true,
     scanner: "basic-validation",
@@ -388,18 +381,18 @@ async function performBasicFileValidation(s3Key) {
 function validateFileSignature(buffer, extension) {
   const signatures = {
     pdf: [0x25, 0x50, 0x44, 0x46], // %PDF
-    docx: [0x50, 0x4B, 0x03, 0x04], // ZIP (DOCX is ZIP-based)
-    xlsx: [0x50, 0x4B, 0x03, 0x04], // ZIP
-    pptx: [0x50, 0x4B, 0x03, 0x04], // ZIP
+    docx: [0x50, 0x4b, 0x03, 0x04], // ZIP-based
+    xlsx: [0x50, 0x4b, 0x03, 0x04],
+    pptx: [0x50, 0x4b, 0x03, 0x04],
   };
-  
+
   const expectedSignature = signatures[extension];
   if (!expectedSignature) return true; // Unknown type, allow
-  
+
   for (let i = 0; i < expectedSignature.length; i++) {
     if (buffer[i] !== expectedSignature[i]) return false;
   }
-  
+
   return true;
 }
 
@@ -408,7 +401,7 @@ async function generateThumbnail(filePath, fileType) {
     logger.info(`🎨 Generating first page thumbnail for ${fileType}: ${filePath}`);
 
     const fs = await import("fs");
-    
+
     // Verify file exists
     try {
       await fs.promises.access(filePath);
@@ -420,17 +413,17 @@ async function generateThumbnail(filePath, fileType) {
     switch (fileType) {
       case "pdf":
         return await generatePDFFirstPageThumbnail(filePath);
-      
+
       case "docx":
         return await generateDOCXFirstPageThumbnail(filePath);
-      
+
       case "pptx":
         return await generatePPTXFirstPageThumbnail(filePath);
-      
+
       case "xlsx":
       case "csv":
         return await generateSpreadsheetFirstPageThumbnail(filePath, fileType);
-      
+
       default:
         return await generateFallbackThumbnail(fileType);
     }
@@ -446,423 +439,112 @@ async function generateThumbnail(filePath, fileType) {
 
 async function generatePDFFirstPageThumbnail(filePath) {
   const fs = await import("fs");
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-  // --- FIX: Dynamically resolve worker regardless of version ---
-  let workerSrc;
-  try {
-    // NEW versions of pdfjs-dist
-    workerSrc = require.resolve("pdfjs-dist/build/pdf.worker.js");
-  } catch (e) {
-    // OLD versions
-    workerSrc = require.resolve("pdfjs-dist/legacy/build/pdf.worker.js");
-  }
-
-  pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
   try {
-    logger.info("📄 Rendering PDF first page (universal worker fix) ...");
+    logger.info("Generating first-page PDF thumbnail (pdftoimg-js)...", {
+      filePath,
+    });
 
-    const data = await fs.promises.readFile(filePath);
-    const canvasFactory = new NodeCanvasFactory();
+    const result = await pdfToImg(filePath, {
+      pages: "firstPage",
+      imgType: "jpg",
+      scale: 2,
+      background: "white",
+    });
 
-    const pdf = await pdfjsLib.getDocument({
-      data,
-      cMapUrl: require.resolve("pdfjs-dist/cmaps") + "/",
-      cMapPacked: true,
-      standardFontDataUrl: require.resolve("pdfjs-dist/standard_fonts") + "/"
-    }).promise;
+    const imgSrc = Array.isArray(result) ? result[0] : result;
+    if (!imgSrc) {
+      throw new Error("pdftoimg-js returned no image for first page");
+    }
 
-    const page = await pdf.getPage(1);
+    const base64 = imgSrc.includes(",") ? imgSrc.split(",")[1] : imgSrc;
+    const buffer = Buffer.from(base64, "base64");
 
-    const viewport = page.getViewport({ scale: 1.5 });
-    const { canvas, context } = canvasFactory.create(
-      viewport.width,
-      viewport.height
+    const outPath = path.join(
+      tmpdir(),
+      `pdf-thumb-${Date.now()}-${Math.random()
+        .toString(16)
+        .slice(2)}.jpg`
     );
 
-    context.fillStyle = "white";
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    await fs.promises.writeFile(outPath, buffer);
 
-    await page.render({
-      canvasContext: context,
-      viewport,
-    }).promise;
+    logger.info("PDF thumbnail generated", {
+      filePath,
+      thumbnailPath: outPath,
+    });
 
-    const buffer = canvas.toBuffer("image/jpeg", { quality: 0.92 });
-    const tmpPath = join(tmpdir(), `pdf-thumb-${Date.now()}.jpg`);
-    await fs.promises.writeFile(tmpPath, buffer);
-
-    logger.info(`✅ PDF thumbnail generated: ${tmpPath}`);
-    return tmpPath;
+    return outPath;
   } catch (err) {
-    logger.error("❌ PDF thumbnail render failed:", err);
-    return await generateEnhancedPDFFallback(filePath);
-  }
-}
+    logger.error("PDF thumbnail generation failed", {
+      filePath,
+      error: err.message,
+      stack: err.stack,
+    });
 
-async function generateDOCXFirstPageThumbnail(filePath) {
-  const fs = await import("fs");
-  const { createCanvas } = await import("canvas");
-
-  try {
-    // Extract text content from DOCX
-    const result = await mammoth.extractRawText({ path: filePath });
-    const content = result.value || "Document content";
-
-    const canvas = createCanvas(1200, 1600);
-    const ctx = canvas.getContext("2d");
-
-    // White background
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, 1200, 1600);
-
-    // Simulate document margins
-    const margin = 80;
-    const contentWidth = 1200 - (margin * 2);
-    
-    // Split content into lines for rendering
-    const lines = content.split("\n").filter(line => line.trim().length > 0);
-    let yPosition = margin + 40;
-    const lineHeight = 35;
-    const maxLines = 40; // Fit approximately first page
-
-    for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
-      if (yPosition > 1600 - margin) break;
-      
-      const line = lines[i].trim();
-      if (line.length === 0) continue;
-
-      // Use larger font for first line (title)
-      if (i === 0) {
-        ctx.font = "bold 32px Arial, sans-serif";
-        ctx.fillStyle = "#000000";
-      } else {
-        ctx.font = "18px Arial, sans-serif";
-        ctx.fillStyle = "#1a1a1a";
-      }
-
-      // Word wrap
-      const words = line.split(' ');
-      let currentLine = '';
-      
-      for (const word of words) {
-        const testLine = currentLine + word + ' ';
-        const metrics = ctx.measureText(testLine);
-        
-        if (metrics.width > contentWidth && currentLine.length > 0) {
-          ctx.fillText(currentLine.trim(), margin, yPosition);
-          currentLine = word + ' ';
-          yPosition += lineHeight;
-          
-          if (yPosition > 1600 - margin) break;
-        } else {
-          currentLine = testLine;
-        }
-      }
-      
-      if (currentLine.trim().length > 0 && yPosition <= 1600 - margin) {
-        ctx.fillText(currentLine.trim(), margin, yPosition);
-        yPosition += lineHeight;
-      }
-    }
-
-    const tmpPath = join(tmpdir(), `docx-thumb-${Date.now()}.jpg`);
-    const buffer = canvas.toBuffer("image/jpeg", { quality: 0.95 });
-    await fs.promises.writeFile(tmpPath, buffer);
-
-    logger.info(`✅ DOCX thumbnail saved: ${tmpPath}`);
-    return tmpPath;
-  } catch (error) {
-    logger.error("❌ DOCX thumbnail generation failed:", error.message);
-    return await generateFallbackThumbnail("docx");
-  }
-}
-
-async function generatePPTXFirstPageThumbnail(filePath) {
-  const fs = await import("fs");
-  const { createCanvas } = await import("canvas");
-
-  try {
-    const canvas = createCanvas(1200, 900); // 4:3 presentation aspect ratio
-    const ctx = canvas.getContext("2d");
-
-    // White background
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, 1200, 900);
-
-    // Simple title placeholder
-    ctx.fillStyle = "#000000";
-    ctx.font = "bold 48px Arial, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("PRESENTATION", 600, 150);
-
-    // Subtitle
-    ctx.fillStyle = "#333333";
-    ctx.font = "28px Arial, sans-serif";
-    ctx.fillText("First Slide Preview", 600, 220);
-
-    // Content area placeholders (minimalistic boxes)
-    ctx.fillStyle = "#f5f5f5";
-    ctx.fillRect(150, 300, 900, 100);
-    ctx.fillRect(150, 420, 420, 300);
-    ctx.fillRect(630, 420, 420, 300);
-
-    const tmpPath = join(tmpdir(), `pptx-thumb-${Date.now()}.jpg`);
-    const buffer = canvas.toBuffer("image/jpeg", { quality: 0.95 });
-    await fs.promises.writeFile(tmpPath, buffer);
-
-    logger.info(`✅ PPTX thumbnail saved: ${tmpPath}`);
-    return tmpPath;
-  } catch (error) {
-    logger.error("❌ PPTX thumbnail generation failed:", error.message);
-    return await generateFallbackThumbnail("pptx");
-  }
-}
-
-async function generateSpreadsheetFirstPageThumbnail(filePath, fileType) {
-  const fs = await import("fs");
-  const { createCanvas } = await import("canvas");
-
-  try {
-    // Read spreadsheet data
-    const workbook = XLSX.readFile(filePath);
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" });
-
-    const canvas = createCanvas(1200, 1600);
-    const ctx = canvas.getContext("2d");
-
-    // White background
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, 1200, 1600);
-
-    // Grid settings
-    const cellWidth = 180;
-    const cellHeight = 40;
-    const startX = 20;
-    const startY = 20;
-    const maxRows = Math.min(data.length, 35);
-    const maxCols = Math.min(data[0]?.length || 6, 6);
-
-    // Draw grid lines
-    ctx.strokeStyle = "#e0e0e0";
-    ctx.lineWidth = 1;
-
-    // Vertical lines
-    for (let col = 0; col <= maxCols; col++) {
-      const x = startX + col * cellWidth;
-      ctx.beginPath();
-      ctx.moveTo(x, startY);
-      ctx.lineTo(x, startY + maxRows * cellHeight);
-      ctx.stroke();
-    }
-
-    // Horizontal lines
-    for (let row = 0; row <= maxRows; row++) {
-      const y = startY + row * cellHeight;
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.lineTo(startX + maxCols * cellWidth, y);
-      ctx.stroke();
-    }
-
-    // Fill cells with data
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-
-    for (let row = 0; row < maxRows; row++) {
-      for (let col = 0; col < maxCols; col++) {
-        const cellValue = String((data[row] && data[row][col]) || "");
-        const truncated = cellValue.length > 20 ? cellValue.substring(0, 17) + "..." : cellValue;
-        
-        const x = startX + col * cellWidth + 8;
-        const y = startY + row * cellHeight + cellHeight / 2;
-        
-        // Header row styling
-        if (row === 0) {
-          ctx.fillStyle = "#f8f9fa";
-          ctx.fillRect(startX + col * cellWidth + 1, startY + 1, cellWidth - 2, cellHeight - 2);
-          ctx.fillStyle = "#000000";
-          ctx.font = "bold 14px Arial, sans-serif";
-        } else {
-          ctx.fillStyle = "#1a1a1a";
-          ctx.font = "14px Arial, sans-serif";
-        }
-        
-        ctx.fillText(truncated, x, y);
-      }
-    }
-
-    const tmpPath = join(tmpdir(), `${fileType}-thumb-${Date.now()}.jpg`);
-    const buffer = canvas.toBuffer("image/jpeg", { quality: 0.95 });
-    await fs.promises.writeFile(tmpPath, buffer);
-
-    logger.info(`✅ Spreadsheet thumbnail saved: ${tmpPath}`);
-    return tmpPath;
-  } catch (error) {
-    logger.error("❌ Spreadsheet thumbnail generation failed:", error.message);
-    return await generateFallbackThumbnail(fileType);
-  }
-}
-
-async function generateEnhancedPDFFallback(filePath) {
-  const fs = await import("fs");
-  const { createCanvas } = await import("canvas");
-
-  try {
-    let pageCount = 1;
-    let fileSize = "Unknown";
-
-    try {
-      const stats = await fs.promises.stat(filePath);
-      fileSize = formatFileSize(stats.size);
-
-      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-      const dataBuffer = await fs.promises.readFile(filePath);
-      const uint8Array = new Uint8Array(dataBuffer);
-      const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
-      pageCount = pdf.numPages;
-    } catch (e) {
-      logger.warn("Could not determine PDF details for fallback:", e.message);
-    }
-
-    const canvas = createCanvas(300, 400);
-    const ctx = canvas.getContext("2d");
-
-    // PDF-style background
-    const gradient = ctx.createLinearGradient(0, 0, 300, 400);
-    gradient.addColorStop(0, "#dc3545");
-    gradient.addColorStop(1, "#c82333");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 300, 400);
-
-    // Main document card
-    ctx.fillStyle = "white";
-    ctx.roundRect(20, 20, 260, 300, 10);
-    ctx.fill();
-
-    // Card shadow
-    ctx.shadowColor = "rgba(0,0,0,0.2)";
-    ctx.shadowBlur = 15;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 5;
-    ctx.strokeStyle = "rgba(0,0,0,0.1)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.shadowColor = "transparent";
-
-    // PDF icon
-    ctx.fillStyle = "#dc3545";
-    ctx.font = "bold 80px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText("📄", 150, 120);
-
-    // "PDF" text
-    ctx.fillStyle = "#2c3e50";
-    ctx.font = "bold 24px Arial";
-    ctx.fillText("PDF DOCUMENT", 150, 190);
-
-    // Page count
-    ctx.fillStyle = "#6c757d";
-    ctx.font = "bold 16px Arial";
-    ctx.fillText(`${pageCount} Page${pageCount !== 1 ? "s" : ""}`, 150, 220);
-
-    // File size
-    ctx.font = "14px Arial";
-    ctx.fillText(fileSize, 150, 245);
-
-    // Footer note
-    ctx.fillStyle = "#adb5bd";
-    ctx.font = "12px Arial";
-    ctx.fillText("Preview Generated", 150, 270);
-
-    const tmpPath = join(tmpdir(), `pdf-fallback-${Date.now()}.jpg`);
-    const buffer = canvas.toBuffer("image/jpeg", { quality: 0.9 });
-    await fs.promises.writeFile(tmpPath, buffer);
-
-    return tmpPath;
-  } catch (fallbackError) {
-    logger.error("Even PDF fallback generation failed:", fallbackError);
+    // Fallback: generic thumbnail
     return await generateFallbackThumbnail("pdf");
   }
 }
 
-// Helper function to format file size
-function formatFileSize(bytes) {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+async function generateDOCXFirstPageThumbnail(filePath) {
+  // actual DOCX rendering is complex + heavy;
+  // this gives a nice type badge instead and is fully portable
+  return generateTypeBadgeThumbnail("DOCX", "docx", 0x4f6bedff);
+}
+
+async function generatePPTXFirstPageThumbnail(filePath) {
+  return generateTypeBadgeThumbnail("PPTX", "pptx", 0xd24726ff);
+}
+
+async function generateSpreadsheetFirstPageThumbnail(filePath) {
+  // for XLSX, CSV, etc.
+  return generateTypeBadgeThumbnail("SHEET", "sheet", 0x217346ff);
+}
+
+async function generateTypeBadgeThumbnail(label, fileTypeForName, bgColorHex) {
+  const fs = await import("fs");
+  const outFileName = `thumb-${fileTypeForName}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}.png`;
+
+  const width = 320;
+  const height = 400;
+
+  // bgColorHex: 0xRRGGBBAA (e.g. 0x4f6bedff)
+  const image = new Jimp({ width, height, color: bgColorHex });
+
+  // Load built-in Jimp font
+  const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+
+  image.print(
+    font,
+    0,
+    0,
+    {
+      text: label,
+      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+      alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE,
+    },
+    width,
+    height
+  );
+
+  const outPath = path.join(tmpdir(), outFileName);
+  await image.write(outPath);
+
+  logger.info("Generated type badge thumbnail", {
+    label,
+    fileTypeForName,
+    outPath,
+  });
+
+  return outPath;
 }
 
 async function generateFallbackThumbnail(fileType) {
-  try {
-    const { createCanvas } = await import("canvas");
-    const fs = await import("fs");
-
-    const tmpPath = join(
-      tmpdir(),
-      `fallback-thumb-${fileType}-${Date.now()}.jpg`
-    );
-    const canvas = createCanvas(300, 400);
-    const ctx = canvas.getContext("2d");
-
-    // gradient background based on file type
-    const gradients = {
-      pdf: ["#ff6b6b", "#ee5a52"],
-      docx: ["#4f6bed", "#3b5bdb"],
-      pptx: ["#ffa726", "#f59f00"],
-      xlsx: ["#20c997", "#12b886"],
-      csv: ["#20c997", "#12b886"],
-      default: ["#6c757d", "#495057"],
-    };
-
-    const gradientColors = gradients[fileType] || gradients.default;
-    const gradient = ctx.createLinearGradient(0, 0, 300, 400);
-    gradient.addColorStop(0, gradientColors[0]);
-    gradient.addColorStop(1, gradientColors[1]);
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 300, 400);
-
-    // File icon container
-    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.beginPath();
-    ctx.arc(150, 180, 60, 0, Math.PI * 2);
-    ctx.fill();
-
-    // File icon
-    ctx.fillStyle = gradientColors[0];
-    ctx.font = "bold 40px Arial";
-    ctx.textAlign = "center";
-
-    const icon = getFileIcon(fileType);
-    ctx.fillText(icon, 150, 190);
-
-    // File type text
-    ctx.fillStyle = "white";
-    ctx.font = "bold 18px Arial";
-    ctx.fillText(fileType.toUpperCase(), 150, 270);
-
-    // Document text
-    ctx.font = "14px Arial";
-    ctx.fillText("DOCUMENT", 150, 290);
-
-    // Subtle border
-    ctx.strokeStyle = "rgba(255,255,255,0.3)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(10, 10, 280, 380);
-
-    const buffer = canvas.toBuffer("image/jpeg", { quality: 0.9 });
-    await fs.promises.writeFile(tmpPath, buffer);
-
-    return tmpPath;
-  } catch (error) {
-    logger.error("Fallback thumbnail generation failed:", error);
-    return null;
-  }
+  const label = (fileType || "FILE").toUpperCase();
+  return generateTypeBadgeThumbnail(label, "generic", 0x444444ff);
 }
 
 function getFileIcon(fileType) {
@@ -929,22 +611,154 @@ async function extractContent(filePath, fileType) {
 }
 
 async function extractFromPDF(filePath) {
+  const start = Date.now();
+  logger.info("Starting PDF extraction...", { filePath });
+
+  const fs = await import("fs");
+
   try {
-    const fs = await import("fs");
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const dataBuffer = await fs.promises.readFile(filePath);
-    const uint8Array = new Uint8Array(dataBuffer);
-    const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
-    let textContent = "";
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const content = await page.getTextContent();
-      textContent += content.items.map((item) => item.str).join(" ") + "\n\n";
+    const buffer = await fs.promises.readFile(filePath);
+
+    // 1) Try native text extraction (fast path)
+    let data;
+    try {
+      data = await pdfParse(buffer);
+    } catch (err) {
+      logger.error("PDF extraction failed (pdf-parse)", {
+        error: err.message,
+        stack: err.stack,
+      });
+      data = null;
     }
-    return textContent.trim();
-  } catch (error) {
-    logger.error("PDF extraction failed:", error);
-    throw new Error(`PDF extraction failed: ${error.message}`);
+
+    let text = (data && data.text ? data.text : "").trim();
+
+    logger.info("PDF text length (pdf-parse)", {
+      filePath,
+      length: text.length,
+    });
+
+    // If we got enough text, use it
+    if (text.length >= 50) {
+      logger.info("PDF extraction succeeded via pdf-parse", {
+        filePath,
+        durationMs: Date.now() - start,
+      });
+      return text;
+    }
+
+    // 2) Fallback to OCR if pdf-parse yields too little
+    logger.warn(
+      "PDF text too short or empty from pdf-parse; falling back to OCR...",
+      { filePath, length: text.length }
+    );
+
+    const ocrText = await extractPDFWithOCR(filePath, 5);
+
+    if (!ocrText || !ocrText.trim()) {
+      throw new Error("No OCR text extracted from PDF images");
+    }
+
+    logger.info("PDF extraction succeeded via OCR fallback", {
+      filePath,
+      length: ocrText.length,
+      durationMs: Date.now() - start,
+    });
+
+    return ocrText.trim();
+  } catch (err) {
+    logger.error("PDF extraction failed", {
+      filePath,
+      error: err.message,
+      stack: err.stack,
+    });
+    throw err;
+  }
+}
+
+async function extractPDFWithOCR(filePath, maxPages = 5) {
+  const start = Date.now();
+  logger.info("Starting OCR extraction for PDF...", {
+    filePath,
+    maxPages,
+  });
+
+  try {
+    // Use pdf-lib just to determine page count (pure JS)
+    const fs = await import("fs");
+    const pdfBytes = await fs.promises.readFile(filePath);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const totalPages = pdfDoc.getPageCount();
+
+    const pagesToProcess = Math.min(totalPages, maxPages);
+    if (pagesToProcess === 0) {
+      throw new Error("PDF has zero pages");
+    }
+
+    const pageIndices = Array.from({ length: pagesToProcess }, (_, i) => i + 1);
+    logger.info("OCR target pages", { pagesToProcess, pageIndices });
+
+    // Convert to PNG images purely in JS (pdf.js behind the scenes)
+    const images = await pdfToImg(filePath, {
+      pages: pageIndices,
+      imgType: "png",
+      scale: 1.5,
+      background: "white",
+    });
+
+    // pdfToImg returns either an array or a single string depending on pages
+    const imageList = Array.isArray(images) ? images : [images];
+
+    if (!imageList.length) {
+      throw new Error("pdftoimg-js returned no images for OCR");
+    }
+
+    let combinedText = "";
+
+    for (let i = 0; i < imageList.length; i++) {
+      const src = imageList[i];
+      if (!src) continue;
+
+      // Expecting DataURL like "data:image/png;base64,...."
+      const base64 = src.includes(",") ? src.split(",")[1] : src;
+      const buffer = Buffer.from(base64, "base64");
+
+      logger.info("Running Tesseract OCR on page image", {
+        page: pageIndices[i],
+      });
+
+      // Tesseract.js is pure JS + WASM, works fine on Render
+      const result = await Tesseract.recognize(buffer, "eng");
+      const pageText = (result.data && result.data.text) || "";
+
+      logger.info("OCR page result", {
+        page: pageIndices[i],
+        length: pageText.length,
+      });
+
+      combinedText += pageText + "\n";
+    }
+
+    combinedText = combinedText.trim();
+
+    if (!combinedText) {
+      throw new Error("No OCR text extracted from PDF images");
+    }
+
+    logger.info("OCR extraction successful", {
+      filePath,
+      totalLength: combinedText.length,
+      durationMs: Date.now() - start,
+    });
+
+    return combinedText;
+  } catch (err) {
+    logger.error("OCR extraction failed", {
+      filePath,
+      error: err.message,
+      stack: err.stack,
+    });
+    throw err;
   }
 }
 
@@ -1003,7 +817,12 @@ async function generateEnhancedMetadata(content, filename, fileType) {
     const groqResult = await generateWithGroq(content, filename);
     if (groqResult?.title) {
       logger.info("Used Groq for metadata");
-      return enrichMetadataWithLocalData(groqResult, content, fileType, "groq");
+      return enrichMetadataWithLocalData(
+        groqResult,
+        content,
+        fileType,
+        "groq"
+      );
     }
   } catch (error) {
     logger.warn(`Groq failed: ${error.message}`);
@@ -1186,12 +1005,7 @@ function parseAIResponse(text) {
   }
 }
 
-function enrichMetadataWithLocalData(
-  aiMetadata,
-  content,
-  fileType,
-  generatedBy
-) {
+function enrichMetadataWithLocalData(aiMetadata, content, fileType, generatedBy) {
   return {
     ...aiMetadata,
     pageCount: estimatePageCount(content),
@@ -1304,7 +1118,9 @@ function generateUniversalDescription(content, fileType) {
   if (content.length < 500)
     return content.substring(0, 200) + (content.length > 200 ? "..." : "");
 
-  const sentences = content.split(/[.!?]+/).filter((s) => s.trim().length > 20);
+  const sentences = content
+    .split(/[.!?]+/)
+    .filter((s) => s.trim().length > 20);
   const keySentences = sentences
     .slice(0, 3)
     .map((s) => s.trim())
@@ -1514,9 +1330,9 @@ function detectUniversalCategory(content, fileType) {
     config.keywords.forEach((keyword) => {
       if (contentLower.includes(keyword)) {
         score += config.weight;
-        const occurrences = (contentLower.match(new RegExp(keyword, "g")) || [])
-          .length;
-        if (occurrences > 1) score += (occurrences - 1) * 0.5;
+        const occurrences =
+          contentLower.match(new RegExp(keyword, "g")) || [];
+        if (occurrences.length > 1) score += (occurrences.length - 1) * 0.5;
       }
     });
     if (score > maxScore) {
@@ -1627,19 +1443,19 @@ async function getAccuratePageCount(filePath, fileType, content) {
     switch (fileType) {
       case "pdf":
         return await getPDFPageCount(filePath);
-      
+
       case "docx":
         return await getDOCXPageCount(filePath, content);
-      
+
       case "pptx":
         return await getPPTXPageCount(filePath);
-      
+
       case "xlsx":
         return await getXLSXPageCount(filePath);
-      
+
       case "csv":
         return 1; // CSV is typically single page
-      
+
       default:
         return estimatePageCount(content);
     }
@@ -1649,21 +1465,17 @@ async function getAccuratePageCount(filePath, fileType, content) {
   }
 }
 
+// ---------- NEW PDF PAGE COUNT (pdf-lib) ----------
 async function getPDFPageCount(filePath) {
   try {
     const fs = await import("fs");
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    
-    const dataBuffer = await fs.promises.readFile(filePath);
-    const uint8Array = new Uint8Array(dataBuffer);
-    const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
-    const pageCount = pdf.numPages;
-    
-    pdf.destroy();
-    logger.info(`✓ PDF page count: ${pageCount}`);
+    const buffer = await fs.promises.readFile(filePath);
+    const pdfDoc = await PDFDocument.load(buffer);
+    const pageCount = pdfDoc.getPageCount();
+    logger.info(`✓ PDF page count (pdf-lib): ${pageCount}`);
     return pageCount;
   } catch (error) {
-    logger.error("Failed to get PDF page count:", error.message);
+    logger.error("Failed to get PDF page count (pdf-lib):", error.message);
     throw error;
   }
 }
@@ -1674,13 +1486,16 @@ async function getDOCXPageCount(filePath, content) {
     // Average: 500 words per page or 3000 characters per page
     const wordCount = content.split(/\s+/).length;
     const charCount = content.length;
-    
+
     const pagesByWords = Math.ceil(wordCount / 500);
     const pagesByChars = Math.ceil(charCount / 3000);
-    
+
     // Use average of both methods
-    const pageCount = Math.max(1, Math.round((pagesByWords + pagesByChars) / 2));
-    
+    const pageCount = Math.max(
+      1,
+      Math.round((pagesByWords + pagesByChars) / 2)
+    );
+
     logger.info(`✓ DOCX estimated page count: ${pageCount} (${wordCount} words)`);
     return pageCount;
   } catch (error) {
@@ -1691,19 +1506,20 @@ async function getDOCXPageCount(filePath, content) {
 
 async function getPPTXPageCount(filePath) {
   try {
-    const AdmZip = (await import('adm-zip')).default;
+    const AdmZip = (await import("adm-zip")).default;
     const fs = await import("fs");
-    
+
     const zipBuffer = await fs.promises.readFile(filePath);
     const zip = new AdmZip(zipBuffer);
     const zipEntries = zip.getEntries();
-    
+
     // Count slide XML files
-    const slideCount = zipEntries.filter(entry => 
-      entry.entryName.startsWith('ppt/slides/slide') && 
-      entry.entryName.endsWith('.xml')
+    const slideCount = zipEntries.filter(
+      (entry) =>
+        entry.entryName.startsWith("ppt/slides/slide") &&
+        entry.entryName.endsWith(".xml")
     ).length;
-    
+
     logger.info(`✓ PPTX page count: ${slideCount} slides`);
     return Math.max(1, slideCount);
   } catch (error) {
@@ -1716,7 +1532,7 @@ async function getXLSXPageCount(filePath) {
   try {
     const workbook = XLSX.readFile(filePath);
     const sheetCount = workbook.SheetNames.length;
-    
+
     logger.info(`✓ XLSX page count: ${sheetCount} sheets`);
     return Math.max(1, sheetCount);
   } catch (error) {

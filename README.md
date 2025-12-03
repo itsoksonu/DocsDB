@@ -29,7 +29,7 @@ DocsDB is a comprehensive platform for sharing, discovering, and monetizing docu
 - **Database**: [MongoDB](https://www.mongodb.com/) (with Mongoose)
 - **Caching & Queues**: [Redis](https://redis.io/), Bull
 - **Storage**: [AWS S3](https://aws.amazon.com/s3/)
-- **Validation**: Joi, Express Validator
+- **Validation**: Express Validator
 - **Security**: Helmet, CORS, Rate Limiting
 
 ## 📋 Prerequisites
