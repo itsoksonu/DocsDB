@@ -26,6 +26,14 @@ router.post('/refresh', async (req, res, next) => {
     };
 
     const newAccessToken = JWTManager.generateAccessToken(tokenPayload);
+    const newRefreshToken = JWTManager.generateRefreshToken(tokenPayload);
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
 
     res.json({
       success: true,

@@ -13,9 +13,9 @@ class APIService {
     });
 
     this.setupInterceptors();
-    this.retryCount = 0;
-    this.maxRetries = 3;
     this.searchCache = new Map();
+    this.isRefreshing = false;
+    this.failedQueue = [];
   }
 
   setupInterceptors() {
@@ -32,7 +32,6 @@ class APIService {
 
     this.client.interceptors.response.use(
       (response) => {
-        this.retryCount = 0; 
         return response;
       },
       async (error) => {
@@ -40,28 +39,52 @@ class APIService {
 
         if (
           error.response?.status === 401 &&
-          !originalRequest._retry &&
-          this.retryCount < this.maxRetries
+          !originalRequest._retry
         ) {
+          if (this.isRefreshing) {
+            // If refresh is already in progress, queue this request
+            return new Promise((resolve, reject) => {
+              this.failedQueue.push({ resolve, reject });
+            }).then(() => {
+              return this.client(originalRequest);
+            }).catch(err => {
+              return Promise.reject(err);
+            });
+          }
+
           originalRequest._retry = true;
-          this.retryCount++;
+          this.isRefreshing = true;
 
           try {
             const response = await this.refreshToken();
-            const { accessToken } = response.data.data;
+            const accessToken = response.data?.data?.accessToken || response.data?.accessToken;
+
+            if (!accessToken) {
+              throw new Error('Invalid refresh response');
+            }
+
             localStorage.setItem("accessToken", accessToken);
 
+            // Process queued requests
+            this.processQueue(null, accessToken);
+
+            // Retry the original request
             originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             return this.client(originalRequest);
           } catch (refreshError) {
-            this.retryCount = 0;
-            localStorage.removeItem("accessToken");
-            window.location.href = "/";
+            // Process queued requests with error
+            this.processQueue(refreshError, null);
+
+            // Only logout if refresh token is invalid/expired
+            if (refreshError.response?.status === 401) {
+              localStorage.removeItem("accessToken");
+              window.location.href = "/";
+            }
             return Promise.reject(refreshError);
+          } finally {
+            this.isRefreshing = false;
           }
         }
-
-        this.retryCount = 0;
 
         const message = error.response?.data?.message || "Something went wrong";
 
@@ -74,6 +97,18 @@ class APIService {
         return Promise.reject(error);
       }
     );
+  }
+
+  processQueue(error, token = null) {
+    this.failedQueue.forEach(({ resolve, reject }) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(token);
+      }
+    });
+
+    this.failedQueue = [];
   }
 
   //auth endpoints

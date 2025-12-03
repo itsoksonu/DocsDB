@@ -21,7 +21,7 @@ export const AuthProvider = ({ children }) => {
 
     const interval = setInterval(() => {
       refreshTokenSilently();
-    }, 25 * 60 * 1000);
+    }, 10 * 60 * 1000); // Refresh every 10 minutes to ensure tokens don't expire
 
     return () => clearInterval(interval);
   }, []);
@@ -31,7 +31,7 @@ export const AuthProvider = ({ children }) => {
       const token = localStorage.getItem("accessToken");
       if (token) {
         const response = await apiService.getCurrentUser();
-        setUser(response.data.user);
+        setUser(response.data.data.user);
       }
     } catch (error) {
       await refreshTokenSilently();
@@ -48,8 +48,8 @@ export const AuthProvider = ({ children }) => {
       const response = await apiService.refreshToken();
       localStorage.setItem("accessToken", response.data.data.accessToken);
 
-      const userResponse = await apiService.getCurrentUser();
-      setUser(userResponse.data.data.user);
+      // Don't fetch user data again after refresh to avoid potential issues
+      // The user state should remain valid with the refreshed token
     } catch (error) {
       await logout();
     } finally {
