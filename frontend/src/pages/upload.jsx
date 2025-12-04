@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import Head from "next/head";
 import { useRouter } from "next/router";
 import { useAuth } from "../contexts/AuthContext";
+import { useUpload } from "../contexts/UploadContext";
 import { DesktopNavbar } from "../components/layout/DesktopNavbar";
 import {
   Upload,
@@ -9,10 +10,14 @@ import {
   X,
   Check,
   AlertCircle,
-  Loader,
   Search,
   Users,
   Code,
+  Minimize2,
+  Shield,
+  FileSearch,
+  Sparkles,
+  Image as ImageIcon,
 } from "../icons";
 import { apiService } from "../services/api";
 import Footer from "../components/layout/Footer";
@@ -22,14 +27,17 @@ export default function UploadPage() {
   const { user } = useAuth();
   const router = useRouter();
   const fileInputRef = useRef(null);
+  const { uploadState, updateUploadState, resetUploadState } = useUpload();
 
-  const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState("idle"); 
-  const [documentId, setDocumentId] = useState(null);
-  const [processingStatus, setProcessingStatus] = useState(null);
-  const [errorMessage, setErrorMessage] = useState("");
+
+  const selectedFile = uploadState.file;
+  const uploadProgress = uploadState.progress;
+  const uploadStatus = uploadState.status;
+  const documentId = uploadState.documentId;
+  const processingStep = uploadState.processingStep;
+  const errorMessage = uploadState.errorMessage;
+  const isMinimized = uploadState.isMinimized;
 
   const ALLOWED_TYPES = {
     "application/pdf": ".pdf",
@@ -43,6 +51,37 @@ export default function UploadPage() {
   };
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+  const getProcessingStepInfo = (step) => {
+    const steps = {
+      "virus-scan": {
+        icon: Shield,
+        label: "Running virus scan",
+        description: "Ensuring your document is safe",
+      },
+      "extracting-content": {
+        icon: FileSearch,
+        label: "Extracting content",
+        description: "Reading document text and data",
+      },
+      "generating-metadata": {
+        icon: Sparkles,
+        label: "Generating metadata",
+        description: "Creating title, description, and tags",
+      },
+      "creating-thumbnail": {
+        icon: ImageIcon,
+        label: "Creating thumbnail",
+        description: "Generating document preview",
+      },
+      "finalizing": {
+        icon: Check,
+        label: "Finalizing",
+        description: "Almost done!",
+      },
+    };
+    return steps[step] || steps["finalizing"];
+  };
 
   const handleFileSelect = (event) => {
     const file = event.target.files[0];
@@ -60,9 +99,12 @@ export default function UploadPage() {
       return;
     }
 
-    setSelectedFile(file);
-    setUploadStatus("idle");
-    setErrorMessage("");
+    updateUploadState({
+      file: file,
+      status: "idle",
+      errorMessage: "",
+      isMinimized: false,
+    });
   };
 
   const handleDrop = (event) => {
@@ -79,9 +121,7 @@ export default function UploadPage() {
   };
 
   const removeFile = () => {
-    setSelectedFile(null);
-    setUploadStatus("idle");
-    setErrorMessage("");
+    resetUploadState();
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -94,7 +134,7 @@ export default function UploadPage() {
       xhr.upload.addEventListener("progress", (event) => {
         if (event.lengthComputable) {
           const progress = Math.round((event.loaded / event.total) * 100);
-          setUploadProgress(progress);
+          updateUploadState({ progress });
         }
       });
 
@@ -116,22 +156,40 @@ export default function UploadPage() {
     });
   };
 
+  const simulateProcessingSteps = async () => {
+    const steps = [
+      "virus-scan",
+      "extracting-content",
+      "generating-metadata",
+      "creating-thumbnail",
+      "finalizing",
+    ];
+
+    for (const step of steps) {
+      updateUploadState({ processingStep: step });
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    }
+  };
+
   const checkProcessingStatus = async (docId) => {
     try {
       const response = await apiService.getUploadStatus(docId);
       const status = response.data.status;
 
-      setProcessingStatus(status);
-
       if (status === "processed") {
-        setUploadStatus("processed");
+        updateUploadState({ 
+          status: "processed", 
+          processingStep: "finalizing" 
+        });
         toast.success("Document processed successfully!");
         setTimeout(() => {
           router.push("/profile?tab=uploaded");
         }, 2000);
       } else if (status === "failed") {
-        setUploadStatus("error");
-        setErrorMessage(response.data.processingError || "Processing failed");
+        updateUploadState({
+          status: "error",
+          errorMessage: response.data.processingError || "Processing failed",
+        });
         toast.error("Document processing failed");
       } else if (status === "processing") {
         setTimeout(() => checkProcessingStatus(docId), 3000);
@@ -145,9 +203,11 @@ export default function UploadPage() {
     if (!selectedFile || !user) return;
 
     setUploading(true);
-    setUploadStatus("uploading");
-    setUploadProgress(0);
-    setErrorMessage("");
+    updateUploadState({
+      status: "uploading",
+      progress: 0,
+      errorMessage: "",
+    });
 
     try {
       const presignResponse = await apiService.getPresignedUrl({
@@ -157,26 +217,33 @@ export default function UploadPage() {
       });
 
       const { uploadUrl, documentId: docId, key } = presignResponse.data;
-      setDocumentId(docId);
+      updateUploadState({ documentId: docId });
 
       await uploadToS3(uploadUrl, selectedFile);
 
-      setUploadProgress(100);
+      updateUploadState({ progress: 100 });
       toast.success("File uploaded successfully!");
 
-      setUploadStatus("processing");
+      updateUploadState({
+        status: "processing",
+        processingStep: "virus-scan",
+      });
+      
       await apiService.completeUpload({
         documentId: docId,
         key: key,
       });
 
+      // Simulate processing steps for better UX
+      simulateProcessingSteps();
       setTimeout(() => checkProcessingStatus(docId), 2000);
     } catch (error) {
       console.error("Upload error:", error);
-      setUploadStatus("error");
-      setErrorMessage(
-        error.response?.data?.message || "Upload failed. Please try again."
-      );
+      updateUploadState({
+        status: "error",
+        errorMessage:
+          error.response?.data?.message || "Upload failed. Please try again.",
+      });
       toast.error(error.response?.data?.message || "Upload failed");
     } finally {
       setUploading(false);
@@ -224,7 +291,7 @@ export default function UploadPage() {
 
             {/* Upload Card */}
             <div className="bg-dark-900 border border-dark-700 rounded-2xl p-8">
-              {!selectedFile ? (
+              {!selectedFile || isMinimized ? (
                 // File Drop Zone
                 <div
                   onDrop={handleDrop}
@@ -283,57 +350,71 @@ export default function UploadPage() {
                   </div>
 
                   {/* Upload Progress */}
-                  {(uploadStatus === "uploading" ||
-                    uploadStatus === "processing") && (
+                  {uploadStatus === "uploading" && (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-dark-300">
-                          {uploadStatus === "uploading"
-                            ? "Uploading..."
-                            : "Processing..."}
-                        </span>
-                        {uploadStatus === "uploading" && (
-                          <span className="text-dark-400">
-                            {uploadProgress}%
-                          </span>
-                        )}
+                        <span className="text-dark-300">Uploading...</span>
+                        <span className="text-dark-400">{uploadProgress}%</span>
                       </div>
                       <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
                         <div
-                          className={`h-full transition-all duration-300 ${
-                            uploadStatus === "processing"
-                              ? "bg-blue-500 animate-pulse"
-                              : "bg-blue-500"
-                          }`}
-                          style={{
-                            width:
-                              uploadStatus === "uploading"
-                                ? `${uploadProgress}%`
-                                : "100%",
-                          }}
+                          className="h-full bg-blue-500 transition-all duration-300"
+                          style={{ width: `${uploadProgress}%` }}
                         />
                       </div>
-                      {uploadStatus === "processing" && (
-                        <div className="flex items-center gap-2 text-sm text-dark-400">
-                          <Loader size={16} className="animate-spin" />
-                          <span>
-                            Processing your document... This may take a moment.
-                          </span>
-                        </div>
-                      )}
+                    </div>
+                  )}
+
+                  {/* Processing Status with Steps */}
+                  {uploadStatus === "processing" && (
+                    <div className="space-y-4">
+                      {/* Current Step Display */}
+                      <div className="p-4 bg-dark-800 rounded-xl">
+                        {(() => {
+                          const stepInfo = getProcessingStepInfo(processingStep);
+                          const StepIcon = stepInfo.icon;
+                          return (
+                            <div className="flex items-center gap-4">
+                              <div className="w-12 h-12 bg-blue-600/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                                <StepIcon size={24} className="text-blue-500 animate-pulse" />
+                              </div>
+                              <div className="flex-1">
+                                <p className="font-medium">{stepInfo.label}</p>
+                                <p className="text-sm text-dark-400">
+                                  {stepInfo.description}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 animate-pulse w-full" />
+                      </div>
+
+                      {/* Minimize Button */}
+                      <button
+                        onClick={() => updateUploadState({ isMinimized: true })}
+                        className="w-full py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
+                      >
+                        <Minimize2 size={18} />
+                        Minimize and continue browsing
+                      </button>
                     </div>
                   )}
 
                   {/* Success Status */}
-                  {uploadStatus === "completed" && (
+                  {uploadStatus === "processed" && (
                     <div className="flex items-center gap-3 p-4 bg-green-900/20 border border-green-700 rounded-xl">
                       <Check size={24} className="text-green-500" />
                       <div>
                         <p className="font-medium text-green-400">
-                          Upload successful!
+                          Processing complete!
                         </p>
                         <p className="text-sm text-dark-400">
-                          Redirecting to home...
+                          Redirecting to your profile...
                         </p>
                       </div>
                     </div>
@@ -476,8 +557,8 @@ export default function UploadPage() {
           </div>
         </div>
       </div>
-         {/* Footer Section */}
-        <Footer />
+      {/* Footer Section */}
+      <Footer />
     </>
   );
 }

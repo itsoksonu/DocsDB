@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useRef } from "react";
 import { apiService } from "../services/api";
 
 const AuthContext = createContext();
@@ -15,16 +15,24 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const refreshIntervalRef = useRef(null);
 
   useEffect(() => {
     checkAuth();
 
-    const interval = setInterval(() => {
-      refreshTokenSilently();
-    }, 10 * 60 * 1000); // Refresh every 10 minutes to ensure tokens don't expire
+    // Refresh token every 13 minutes (before 15min expiry)
+    refreshIntervalRef.current = setInterval(() => {
+      if (user) {
+        refreshTokenSilently();
+      }
+    }, 13 * 60 * 1000);
 
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, [user]);
 
   const checkAuth = async () => {
     try {
@@ -34,24 +42,54 @@ export const AuthProvider = ({ children }) => {
         setUser(response.data.data.user);
       }
     } catch (error) {
-      await refreshTokenSilently();
+      // If getCurrentUser fails, try to refresh the token
+      console.log("Initial auth check failed, attempting token refresh...");
+      const refreshSuccess = await refreshTokenSilently();
+      
+      // Only if refresh also fails, clear the token
+      if (!refreshSuccess) {
+        localStorage.removeItem("accessToken");
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const refreshTokenSilently = async () => {
-    if (refreshing) return;
+    if (refreshing) return false;
 
     setRefreshing(true);
     try {
       const response = await apiService.refreshToken();
-      localStorage.setItem("accessToken", response.data.data.accessToken);
-
-      // Don't fetch user data again after refresh to avoid potential issues
-      // The user state should remain valid with the refreshed token
+      const newAccessToken = response.data.data.accessToken || response.data.accessToken;
+      
+      if (newAccessToken) {
+        localStorage.setItem("accessToken", newAccessToken);
+        
+        // Fetch user data if we don't have it
+        if (!user) {
+          try {
+            const userResponse = await apiService.getCurrentUser();
+            setUser(userResponse.data.data.user);
+          } catch (err) {
+            console.error("Failed to fetch user after refresh:", err);
+          }
+        }
+        
+        return true;
+      }
+      return false;
     } catch (error) {
-      await logout();
+      console.error("Token refresh failed:", error);
+      
+      // Only logout if it's a 401 (unauthorized) error
+      // This means the refresh token is invalid/expired
+      if (error.response?.status === 401) {
+        console.log("Refresh token expired, logging out...");
+        await logout();
+      }
+      
+      return false;
     } finally {
       setRefreshing(false);
     }
@@ -102,6 +140,11 @@ export const AuthProvider = ({ children }) => {
     } finally {
       localStorage.removeItem("accessToken");
       setUser(null);
+      
+      // Clear the refresh interval
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
     }
   };
 
@@ -112,6 +155,7 @@ export const AuthProvider = ({ children }) => {
     logout,
     loading,
     refreshing,
+    refreshToken: refreshTokenSilently, 
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

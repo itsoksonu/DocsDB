@@ -37,6 +37,10 @@ class APIService {
       async (error) => {
         const originalRequest = error.config;
 
+        if (originalRequest.url?.includes('/auth/refresh')) {
+          return Promise.reject(error);
+        }
+
         if (
           error.response?.status === 401 &&
           !originalRequest._retry
@@ -78,7 +82,7 @@ class APIService {
             // Only logout if refresh token is invalid/expired
             if (refreshError.response?.status === 401) {
               localStorage.removeItem("accessToken");
-              window.location.href = "/";
+              console.log("Refresh token expired");
             }
             return Promise.reject(refreshError);
           } finally {
@@ -224,9 +228,9 @@ class APIService {
 
   // documents endpoints
   async getUserDocuments(params = {}) {
-  const response = await this.client.get("/documents/user/my-documents", { params });
-  return response.data;
-}
+    const response = await this.client.get("/documents/user/my-documents", { params });
+    return response.data;
+  }
 }
 
 export const apiService = new APIService();

@@ -1,6 +1,8 @@
 import { AuthProvider } from '../contexts/AuthContext.js';
 import dynamic from 'next/dynamic';
 import '../styles/globals.css';
+import { UploadProvider } from "../contexts/UploadContext.jsx";
+import GlobalUploadWidget from "../components/GlobalUploadWidget.jsx";
 
 const Toaster = dynamic(
   () => import('react-hot-toast').then((mod) => ({ default: mod.Toaster })),
@@ -10,6 +12,8 @@ const Toaster = dynamic(
 export default function App({ Component, pageProps }) {
   return (
     <AuthProvider>
+      <UploadProvider>
+      <GlobalUploadWidget />
       <Component {...pageProps} />
       <Toaster
         position="top-center"
@@ -22,6 +26,7 @@ export default function App({ Component, pageProps }) {
           }
         }}
       />
+      </UploadProvider>
     </AuthProvider>
   );
 }
