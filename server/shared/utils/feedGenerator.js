@@ -12,19 +12,23 @@ export async function generateFeed({
   includeAds = true
 }) {
   try {
-    const query = {
+    const baseQuery = {
       status: 'processed',
       visibility: 'public'
     };
 
     if (category) {
-      query.category = category;
+      baseQuery.category = category;
     }
+
+    const totalDocs = await Document.countDocuments(baseQuery);
+
+    const fetchQuery = { ...baseQuery };
 
     if (cursor) {
       const cursorDoc = await Document.findById(cursor).select('createdAt');
       if (cursorDoc) {
-        query.createdAt = { $lt: cursorDoc.createdAt };
+        fetchQuery.createdAt = { $lt: cursorDoc.createdAt };
       }
     }
 
@@ -41,7 +45,7 @@ export async function generateFeed({
         sortOptions = { createdAt: -1 };
     }
 
-    const documents = await Document.find(query)
+    const documents = await Document.find(fetchQuery)
       .select('-metadata -embeddingsId')
       .populate('userId', 'name')
       .sort(sortOptions)
@@ -64,10 +68,11 @@ export async function generateFeed({
     return {
       documents: feedDocuments,
       pagination: {
-        hasMore: nextCursor !== null,
+        hasMore: nextCursor !== null && feedDocuments.length >= limit,
         nextCursor,
         limit,
-        totalReturned: feedDocuments.length
+        totalReturned: feedDocuments.length,
+        total: totalDocs
       },
       metadata: {
         sort,

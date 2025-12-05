@@ -103,7 +103,7 @@ router.get('/search',
   [
     query('q').trim().notEmpty().isLength({ min: 1, max: 100 }),
     query('type').optional().isIn(['semantic', 'keyword']).default('keyword'),
-    query('category').optional().isIn(['technology', 'business', 'education', 'health', 'entertainment', 'sports', 'finance-money-management', 'science', 'art', 'history', 'other']),
+    query('category').optional().isIn(["technology","business","education","health","entertainment","sports","finance-money-management","games-activities","comics","philosophy","career-growth","politics","biography-memoir","study-aids-test-prep","law","art","science","history","erotica","lifestyle","religion-spirituality","self-improvement","language-arts","cooking-food-wine","true-crime","sheet-music","fiction","non-fiction","science-fiction","fantasy","romance","thriller-suspense","horror","poetry","graphic-novels","young-adult","children","parenting-family","marketing-sales","psychology","social-sciences","engineering","mathematics", "data-science", "nature-environment","travel","reference","design", "news-media", "professional-development", "other"]),
     query('page').optional().isInt({ min: 1 }).default(1),
     query('limit').optional().isInt({ min: 1, max: 50 }).default(20)
   ],
