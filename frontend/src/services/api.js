@@ -37,7 +37,13 @@ class APIService {
       async (error) => {
         const originalRequest = error.config;
 
+        // Don't intercept refresh token requests to avoid infinite loops
         if (originalRequest.url?.includes('/auth/refresh')) {
+          return Promise.reject(error);
+        }
+
+        // Don't intercept logout requests
+        if (originalRequest.url?.includes('/auth/logout')) {
           return Promise.reject(error);
         }
 
@@ -50,6 +56,10 @@ class APIService {
             return new Promise((resolve, reject) => {
               this.failedQueue.push({ resolve, reject });
             }).then(() => {
+              const token = localStorage.getItem("accessToken");
+              if (token) {
+                originalRequest.headers.Authorization = `Bearer ${token}`;
+              }
               return this.client(originalRequest);
             }).catch(err => {
               return Promise.reject(err);
@@ -60,6 +70,7 @@ class APIService {
           this.isRefreshing = true;
 
           try {
+            console.log("API interceptor: Attempting token refresh...");
             const response = await this.refreshToken();
             const accessToken = response.data?.data?.accessToken || response.data?.accessToken;
 
@@ -68,6 +79,7 @@ class APIService {
             }
 
             localStorage.setItem("accessToken", accessToken);
+            console.log("API interceptor: Token refreshed successfully");
 
             // Process queued requests
             this.processQueue(null, accessToken);
@@ -76,13 +88,15 @@ class APIService {
             originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             return this.client(originalRequest);
           } catch (refreshError) {
+            console.error("API interceptor: Token refresh failed", refreshError);
+            
             // Process queued requests with error
             this.processQueue(refreshError, null);
 
-            // Only logout if refresh token is invalid/expired
+            // Only clear token and redirect if refresh token is invalid/expired
             if (refreshError.response?.status === 401) {
               localStorage.removeItem("accessToken");
-              console.log("Refresh token expired");
+              console.log("API interceptor: Refresh token expired");
             }
             return Promise.reject(refreshError);
           } finally {
@@ -92,10 +106,14 @@ class APIService {
 
         const message = error.response?.data?.message || "Something went wrong";
 
+        // Don't show toast for 401 errors or refresh failures
         if (error.response?.status >= 500) {
           toast.error("Server error. Please try again later.");
         } else if (error.response?.status !== 401) {
-          toast.error(message);
+          // Only show toast for non-401 errors
+          if (!originalRequest._retry) {
+            toast.error(message);
+          }
         }
 
         return Promise.reject(error);

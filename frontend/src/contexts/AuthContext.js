@@ -16,16 +16,21 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const refreshIntervalRef = useRef(null);
+  const isInitialMount = useRef(true);
 
   useEffect(() => {
-    checkAuth();
+    // Only run checkAuth on initial mount
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      checkAuth();
+    }
 
-    // Refresh token every 13 minutes (before 15min expiry)
+    // Set up refresh interval
     refreshIntervalRef.current = setInterval(() => {
       if (user) {
         refreshTokenSilently();
       }
-    }, 13 * 60 * 1000);
+    }, 13 * 60 * 1000); // Refresh every 13 minutes
 
     return () => {
       if (refreshIntervalRef.current) {
@@ -35,42 +40,76 @@ export const AuthProvider = ({ children }) => {
   }, [user]);
 
   const checkAuth = async () => {
+    setLoading(true);
     try {
       const token = localStorage.getItem("accessToken");
-      if (token) {
+      
+      if (!token) {
+        // No access token, try to get one using refresh token
+        console.log("No access token found, attempting to refresh...");
+        const refreshSuccess = await refreshTokenSilently();
+        
+        if (!refreshSuccess) {
+          console.log("No valid session found");
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Try to get user data
+      try {
         const response = await apiService.getCurrentUser();
         setUser(response.data.data.user);
+        console.log("User authenticated successfully");
+      } catch (error) {
+        // If getCurrentUser fails, try refreshing token
+        console.log("Failed to get user, attempting token refresh...");
+        const refreshSuccess = await refreshTokenSilently();
+        
+        if (refreshSuccess) {
+          // Try getting user again after successful refresh
+          try {
+            const response = await apiService.getCurrentUser();
+            setUser(response.data.data.user);
+            console.log("User authenticated after refresh");
+          } catch (retryError) {
+            console.error("Failed to get user after refresh:", retryError);
+            localStorage.removeItem("accessToken");
+          }
+        } else {
+          localStorage.removeItem("accessToken");
+        }
       }
     } catch (error) {
-      // If getCurrentUser fails, try to refresh the token
-      console.log("Initial auth check failed, attempting token refresh...");
-      const refreshSuccess = await refreshTokenSilently();
-      
-      // Only if refresh also fails, clear the token
-      if (!refreshSuccess) {
-        localStorage.removeItem("accessToken");
-      }
+      console.error("Auth check failed:", error);
+      localStorage.removeItem("accessToken");
     } finally {
       setLoading(false);
     }
   };
 
   const refreshTokenSilently = async () => {
-    if (refreshing) return false;
+    if (refreshing) {
+      console.log("Refresh already in progress, skipping...");
+      return false;
+    }
 
     setRefreshing(true);
     try {
+      console.log("Attempting to refresh token...");
       const response = await apiService.refreshToken();
       const newAccessToken = response.data.data.accessToken || response.data.accessToken;
       
       if (newAccessToken) {
         localStorage.setItem("accessToken", newAccessToken);
+        console.log("Token refreshed successfully");
         
         // Fetch user data if we don't have it
         if (!user) {
           try {
             const userResponse = await apiService.getCurrentUser();
             setUser(userResponse.data.data.user);
+            console.log("User data fetched after refresh");
           } catch (err) {
             console.error("Failed to fetch user after refresh:", err);
           }
@@ -83,10 +122,10 @@ export const AuthProvider = ({ children }) => {
       console.error("Token refresh failed:", error);
       
       // Only logout if it's a 401 (unauthorized) error
-      // This means the refresh token is invalid/expired
       if (error.response?.status === 401) {
-        console.log("Refresh token expired, logging out...");
-        await logout();
+        console.log("Refresh token expired, clearing session...");
+        localStorage.removeItem("accessToken");
+        setUser(null);
       }
       
       return false;
@@ -155,7 +194,7 @@ export const AuthProvider = ({ children }) => {
     logout,
     loading,
     refreshing,
-    refreshToken: refreshTokenSilently, 
+    refreshToken: refreshTokenSilently,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
