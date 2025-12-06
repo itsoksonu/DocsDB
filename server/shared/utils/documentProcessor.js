@@ -15,11 +15,16 @@ import Groq from "groq-sdk";
 const require = createRequire(import.meta.url);
 const execAsync = promisify(exec);
 
-const rawPdfParse = require("pdf-parse");
-const pdfParse =
-  typeof rawPdfParse === "function"
-    ? rawPdfParse
-    : rawPdfParse?.default || rawPdfParse?.pdfParse;
+let pdfParse;
+try {
+  const rawPdfParse = require("pdf-parse");
+  // Handle different export formats
+  pdfParse = rawPdfParse.default || rawPdfParse;
+  logger.info("pdf-parse loaded successfully", { type: typeof pdfParse });
+} catch (error) {
+  logger.error("Failed to load pdf-parse:", error);
+  pdfParse = null;
+}
 
 logger.info("pdf-parse typeof", { type: typeof pdfParse });
 
@@ -620,6 +625,23 @@ async function extractFromPDF(filePath) {
   const fs = await import("fs");
 
   try {
+    if (!pdfParse || typeof pdfParse !== 'function') {
+      logger.warn("pdf-parse not available, falling back to OCR");
+      const ocrText = await extractPDFWithOCR(filePath, 5);
+      
+      if (!ocrText || !ocrText.trim()) {
+        throw new Error("No OCR text extracted from PDF images");
+      }
+
+      logger.info("PDF extraction succeeded via OCR", {
+        filePath,
+        length: ocrText.length,
+        durationMs: Date.now() - start,
+      });
+
+      return ocrText.trim();
+    }
+
     const buffer = await fs.promises.readFile(filePath);
 
     // 1) Try native text extraction (fast path)
@@ -1570,27 +1592,25 @@ ${content.substring(0, 8000)}`.trim();
 
     const result = await geminiAI.models.embedContent({
       model: "text-embedding-004",
-      content: textToEmbed,
+      contents: textToEmbed,
     });
 
-    const embedding = result.embedding.values;
+    const embedding = result.embeddings[0]?.values;
+
+    if (!embedding) {
+      throw new Error("No embedding values returned from API");
+    }
+
     logger.info(`✓ Generated embedding with ${embedding.length} dimensions`);
     return embedding;
   } catch (error) {
-    logger.error("Failed to generate embedding:", error);
+    logger.error("Failed to generate embedding:", {
+      error: error.message,
+      stack: error.stack
+    });
     // Return null to allow processing to finish without embedding
     return null;
   }
-}
-
-function generateContentHash(content) {
-  let hash = 0;
-  for (let i = 0; i < content.length; i++) {
-    const char = content.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash).toString(36);
 }
 
 async function cleanupTempFile(filePath) {
