@@ -7,10 +7,14 @@ import databaseManager from '../../shared/database/connection.js';
 import { generateFeed } from '../../shared/utils/feedGenerator.js';
 import logger from '../../shared/utils/logger.js';
 import s3 from '../../shared/utils/s3.js'
+import { GoogleGenAI } from "@google/genai";
 
 const router = express.Router();
 
 const redisClient = databaseManager.getRedisClient();
+const geminiAI = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+  : null;
 
 // Input validation for feed queries
 const feedValidation = [
@@ -23,15 +27,15 @@ const feedValidation = [
 // Helper function to add signed thumbnails
 async function addSignedThumbnails(documents) {
   if (!documents || documents.length === 0) return documents;
-  
+
   return await Promise.all(
     documents.map(async (doc) => {
       doc = doc.toObject ? doc.toObject() : doc;
-      
+
       if (doc.thumbnailS3Path) {
         doc.thumbnailUrl = await s3.generateViewUrl(doc.thumbnailS3Path);
       }
-      
+
       return doc;
     })
   );
@@ -53,11 +57,11 @@ router.get('/',
       }
 
       const { cursor, limit, category, sort } = req.query;
-      
+
       const userId = req.user?.userId || 'public';
 
       const cacheKey = `feed:${userId}:${category || 'all'}:${sort}:${cursor || 'initial'}:${limit}`;
-      
+
       if (redisClient) {
         const cachedFeed = await redisClient.get(cacheKey);
         if (cachedFeed) {
@@ -97,7 +101,7 @@ router.get('/',
   }
 );
 
-// Search documents 
+// Search documents
 router.get('/search',
   rateLimitMiddleware('search'),
   [
@@ -113,23 +117,25 @@ router.get('/search',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
       const { q, type, category, page, limit } = req.query;
-      const userId = req.user?.userId || 'public';
+      const userId = req.user?.userId || "public";
 
-      const cacheKey = `search:${q}:${type}:${category || 'all'}:${page}:${limit}`;
-      
+      const cacheKey = `search:${q}:${type}:${
+        category || "all"
+      }:${page}:${limit}`;
+
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
         if (cached) {
           logger.debug(`Cache hit for search: ${cacheKey}`);
           return res.json({
             success: true,
-            data: JSON.parse(cached)
+            data: JSON.parse(cached),
           });
         }
       }
@@ -162,7 +168,7 @@ router.get('/search',
   }
 );
 
-// Get related documents 
+// Get related documents
 router.get('/related/:documentId',
   [
     query('limit').optional().isInt({ min: 1, max: 20 }).default(10)
@@ -173,7 +179,7 @@ router.get('/related/:documentId',
       const { limit } = req.query;
 
       const relatedDocs = await getRelatedDocuments(documentId, parseInt(limit));
-      
+
       const docsWithThumbnails = await addSignedThumbnails(relatedDocs);
 
       res.json({
@@ -187,7 +193,7 @@ router.get('/related/:documentId',
   }
 );
 
-// Get trending documents 
+// Get trending documents
 router.get('/trending',
   [
     query('timeframe').optional().isIn(['today', 'week', 'month']).default('week'),
@@ -209,7 +215,7 @@ router.get('/trending',
       }
 
       const trendingDocs = await getTrendingDocuments(timeframe, parseInt(limit));
-      
+
       const docsWithThumbnails = await addSignedThumbnails(trendingDocs);
 
       if (redisClient) {
@@ -230,37 +236,37 @@ router.get('/trending',
 // Get categories with counts
 router.get('/categories',
   async (req, res, next) => {
-    try {
+  try {
       const cacheKey = 'categories:counts';
 
-      if (redisClient) {
-        const cached = await redisClient.get(cacheKey);
-        if (cached) {
-          return res.json({
-            success: true,
+    if (redisClient) {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        return res.json({
+          success: true,
             data: JSON.parse(cached)
-          });
-        }
+        });
       }
-
-      const categories = await getCategoryCounts();
-
-      if (redisClient) {
-        await redisClient.setEx(cacheKey, 3600, JSON.stringify(categories));
-      }
-
-      res.json({
-        success: true,
-        data: categories
-      });
-
-    } catch (error) {
-      next(error);
     }
+
+    const categories = await getCategoryCounts();
+
+    if (redisClient) {
+      await redisClient.setEx(cacheKey, 3600, JSON.stringify(categories));
+    }
+
+    res.json({
+      success: true,
+        data: categories
+    });
+
+  } catch (error) {
+    next(error);
+  }
   }
 );
 
-// Get personalized feed 
+// Get personalized feed
 router.get('/personalized',
   authMiddleware,
   rateLimitMiddleware('search'),
@@ -280,7 +286,7 @@ router.get('/personalized',
       const userId = req.user.userId;
 
       const cacheKey = `feed:personalized:${userId}:${category || 'all'}:${sort}:${cursor || 'initial'}:${limit}`;
-      
+
       if (redisClient) {
         const cachedFeed = await redisClient.get(cacheKey);
         if (cachedFeed) {
@@ -324,7 +330,7 @@ router.get('/personalized',
 // Helper functions
 async function performSearch({ query, type, category, page, limit, userId }) {
   const skip = (page - 1) * limit;
-  
+
   let searchQuery = {
     status: 'processed',
     visibility: 'public'
@@ -334,17 +340,89 @@ async function performSearch({ query, type, category, page, limit, userId }) {
     searchQuery.category = category;
   }
 
-  if (type === 'keyword') {
+  if (type === "semantic") {
+    try {
+      if (!geminiAI)
+        throw new Error("Gemini not configured for semantic search");
+
+      const embeddingResult = await geminiAI.models.embedContent({
+        model: "text-embedding-004",
+        contents: [
+          {
+            parts: [{ text: query }],
+          },
+        ],
+      });
+      const queryVector = embeddingResult.embeddings?.[0]?.values;
+
+      if (!queryVector) throw new Error("Failed to generate query embedding");
+
+      const pipeline = [
+        {
+          $vectorSearch: {
+            index: "gemini-embedding", // User must create this in Atlas
+            path: "embedding",
+            queryVector: queryVector,
+            numCandidates: 100,
+            limit: limit * 2, // Check more for filtering
+          },
+        },
+        {
+          $match: {
+            status: "processed",
+            visibility: "public",
+            ...(category ? { category } : {}),
+          },
+        },
+        {
+          $project: {
+            embedding: 0,
+            score: { $meta: "vectorSearchScore" },
+          },
+        },
+        { $limit: limit },
+      ];
+
+      const documents = await Document.aggregate(pipeline);
+
+      // Manually populate userId since aggregate doesn't do it automatically like find()
+      await Document.populate(documents, { path: "userId", select: "name" });
+
+      return {
+        documents: documents.map((doc) => ({ ...doc, id: doc._id })), // Normalize ID
+        pagination: {
+          page,
+          limit,
+          total: documents.length, // Approximate for vector search
+          hasMore: false, // Vector search usually top-k
+        },
+        query,
+        type: "semantic",
+      };
+    } catch (error) {
+      logger.error("Semantic search failed, falling back to keyword:", error);
+      // Fallback to keyword search
+      return performSearch({
+        query,
+        type: "keyword",
+        category,
+        page,
+        limit,
+        userId,
+      });
+    }
+  } else {
+    // Keyword search using MongoDB Text Index
     searchQuery.$text = { $search: query };
-    
+
     const [documents, total] = await Promise.all([
       Document.find(searchQuery)
-        .select('-metadata -embeddingsId')
-        .populate('userId', 'name')
-        .sort({ score: { $meta: 'textScore' } })
+        .select("-metadata -embeddingsId -embedding")
+        .populate("userId", "name")
+        .sort({ score: { $meta: "textScore" } })
         .skip(skip)
         .limit(limit),
-      Document.countDocuments(searchQuery)
+      Document.countDocuments(searchQuery),
     ]);
 
     return {
@@ -353,33 +431,10 @@ async function performSearch({ query, type, category, page, limit, userId }) {
         page,
         limit,
         total,
-        hasMore: (skip + documents.length) < total
+        hasMore: skip + documents.length < total,
       },
       query,
-      type
-    };
-  } else {
-    // Semantic search - placeholder for vector search
-    // This would integrate with Pinecone/Elasticsearch
-    const documents = await Document.find(searchQuery)
-      .select('-metadata -embeddingsId')
-      .populate('userId', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    const total = await Document.countDocuments(searchQuery);
-
-    return {
-      documents,
-      pagination: {
-        page,
-        limit,
-        total,
-        hasMore: (skip + documents.length) < total
-      },
-      query,
-      type: 'semantic' // Fallback to newest for now
+      type,
     };
   }
 }
@@ -401,15 +456,15 @@ async function getRelatedDocuments(documentId, limit) {
   })
   .select('-metadata -embeddingsId')
   .populate('userId', 'name')
-  .sort({ viewsCount: -1, createdAt: -1 })
-  .limit(limit);
+    .sort({ viewsCount: -1, createdAt: -1 })
+    .limit(limit);
 
   return relatedDocs;
 }
 
 async function getTrendingDocuments(timeframe, limit) {
   const timeFilter = getTimeFilter(timeframe);
-  
+
   const trendingDocs = await Document.aggregate([
     {
       $match: {

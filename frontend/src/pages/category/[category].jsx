@@ -98,7 +98,7 @@ export default function CategoryPage() {
       const params = {
         category: category,
         limit: 20, 
-        sort: "relevent",
+        sort: "relevant",
       };
 
       if (cursorRef.current) {

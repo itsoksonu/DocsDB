@@ -1,89 +1,93 @@
 import mongoose from 'mongoose';
 
 const documentSchema = new mongoose.Schema({
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+      required: true,
     index: true
-  },
-  originalFilename: {
-    type: String,
-    required: true,
+    },
+    originalFilename: {
+      type: String,
+      required: true,
     maxlength: 255
-  },
-  s3Path: {
-    type: String,
+    },
+    s3Path: {
+      type: String,
     required: true
-  },
-  thumbnailS3Path: String,
-  status: {
-    type: String,
+    },
+    thumbnailS3Path: String,
+    status: {
+      type: String,
     enum: ['uploaded', 'processing', 'processed', 'failed', 'quarantined', 'rejected'],
     default: 'uploaded',
     index: true
-  },
-  fileType: {
-    type: String,
+    },
+    fileType: {
+      type: String,
     enum: ['pdf', 'docx', 'pptx', 'xlsx', 'csv'],
     required: true
-  },
-  sizeBytes: {
-    type: Number,
-    required: true,
+    },
+    sizeBytes: {
+      type: Number,
+      required: true,
     min: [1, 'File size must be at least 1 byte'],
     max: [104857600, 'File size cannot exceed 100MB']
-  },
-  pageCount: Number,
-  generatedTitle: {
-    type: String,
+    },
+    pageCount: Number,
+    generatedTitle: {
+      type: String,
     maxlength: 255
-  },
-  generatedDescription: {
-    type: String,
+    },
+    generatedDescription: {
+      type: String,
     maxlength: 500
-  },
+    },
   tags: [{
-    type: String,
-    trim: true,
+        type: String,
+        trim: true,
     lowercase: true
   }],
-  category: {
-    type: String,
+    category: {
+      type: String,
     enum: ["for-you","technology","business","education","health","entertainment","sports","finance-money-management","games-activities","comics","philosophy","career-growth","politics","biography-memoir","study-aids-test-prep","law","art","science","history","erotica","lifestyle","religion-spirituality","self-improvement","language-arts","cooking-food-wine","true-crime","sheet-music","fiction","non-fiction","science-fiction","fantasy","romance","thriller-suspense","horror","poetry","graphic-novels","young-adult","children","parenting-family","marketing-sales","psychology","social-sciences","engineering","mathematics", "data-science", "nature-environment","travel","reference","design", "news-media", "professional-development", "other"],
     default: 'other',
     index: true
-  },
-  embeddingsId: String,
-  visibility: {
-    type: String,
+    },
+    embeddingsId: String,
+    embedding: {
+      type: [Number],
+      select: false,
+    },
+    visibility: {
+      type: String,
     enum: ['public', 'private', 'unlisted'],
     default: 'public'
-  },
-  monetizationEnabled: {
-    type: Boolean,
+    },
+    monetizationEnabled: {
+      type: Boolean,
     default: true
-  },
-  revenueSharePercent: {
-    type: Number,
-    default: 70,
-    min: 0,
+    },
+    revenueSharePercent: {
+      type: Number,
+      default: 70,
+      min: 0,
     max: 100
-  },
-  viewsCount: {
-    type: Number,
+    },
+    viewsCount: {
+      type: Number,
     default: 0
-  },
-  downloadsCount: {
-    type: Number,
+    },
+    downloadsCount: {
+      type: Number,
     default: 0
-  },
-  processingError: String,
-  virusScanResult: {
-    clean: Boolean,
-    scanner: String,
+    },
+    processingError: String,
+    virusScanResult: {
+      clean: Boolean,
+      scanner: String,
     scannedAt: Date
-  },
+    },
   metadata: mongoose.Schema.Types.Mixed 
 }, {
   timestamps: true
@@ -93,8 +97,8 @@ const documentSchema = new mongoose.Schema({
 documentSchema.index({ userId: 1, createdAt: -1 });
 documentSchema.index({ status: 1, createdAt: -1 });
 documentSchema.index({ category: 1, createdAt: -1 });
-documentSchema.index({ tags: 1 }); 
-documentSchema.index({ 
+documentSchema.index({ tags: 1 });
+documentSchema.index({
   'generatedTitle': 'text', 
   'generatedDescription': 'text',
   'tags': 'text'
@@ -116,12 +120,12 @@ documentSchema.methods.isViewable = function() {
 
 // Static method to get popular documents
 documentSchema.statics.getPopular = function(limit = 10) {
-  return this.find({ 
+  return this.find({
     status: 'processed', 
     visibility: 'public' 
   })
-  .sort({ viewsCount: -1 })
-  .limit(limit)
+    .sort({ viewsCount: -1 })
+    .limit(limit)
   .populate('userId', 'name email');
 };
 

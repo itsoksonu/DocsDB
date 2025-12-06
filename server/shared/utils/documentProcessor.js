@@ -103,14 +103,17 @@ export async function processDocument(documentId, s3Key) {
       document.thumbnailS3Path = thumbnailKey;
     }
 
-    const embeddingsId = await generateLocalEmbeddings(content, metadata);
+    const embedding = await generateLocalEmbeddings(content, metadata);
 
     document.generatedTitle = metadata.title;
     document.generatedDescription = metadata.description;
     document.tags = metadata.tags;
     document.category = metadata.category;
     document.pageCount = metadata.pageCount;
-    document.embeddingsId = embeddingsId;
+    // document.embeddingsId = embeddingsId; // Deprecated in favor of direct embedding
+    if (embedding) {
+      document.embedding = embedding;
+    }
     document.metadata = metadata;
     document.status = "processed";
     document.virusScanResult = virusScanResult;
@@ -1118,9 +1121,7 @@ function generateUniversalDescription(content, fileType) {
   if (content.length < 500)
     return content.substring(0, 200) + (content.length > 200 ? "..." : "");
 
-  const sentences = content
-    .split(/[.!?]+/)
-    .filter((s) => s.trim().length > 20);
+  const sentences = content.split(/[.!?]+/).filter((s) => s.trim().length > 20);
   const keySentences = sentences
     .slice(0, 3)
     .map((s) => s.trim())
@@ -1330,8 +1331,7 @@ function detectUniversalCategory(content, fileType) {
     config.keywords.forEach((keyword) => {
       if (contentLower.includes(keyword)) {
         score += config.weight;
-        const occurrences =
-          contentLower.match(new RegExp(keyword, "g")) || [];
+        const occurrences = contentLower.match(new RegExp(keyword, "g")) || [];
         if (occurrences.length > 1) score += (occurrences.length - 1) * 0.5;
       }
     });
@@ -1550,19 +1550,37 @@ function estimatePageCount(content) {
 }
 
 async function generateLocalEmbeddings(content, metadata) {
-  const embeddingData = {
-    contentHash: generateContentHash(content.substring(0, 2000)),
-    keyTerms: metadata.tags,
-    category: metadata.category,
-    documentType: metadata.documentType,
-    wordCount: metadata.wordCount,
-    readability: metadata.readabilityScore,
-    generatedAt: new Date().toISOString(),
-  };
-  const embeddingId = `local-${Buffer.from(JSON.stringify(embeddingData))
-    .toString("base64")
-    .substring(0, 32)}`;
-  return embeddingId;
+  try {
+    if (!geminiAI) {
+      logger.warn(
+        "Skipping embedding generation: Gemini API key not configured"
+      );
+      return null;
+    }
+
+    // Truncate content to meet model limits (if any), though text-embedding-004 handles large context
+    // efficiently. We'll use a safe chunk of text + critical metadata.
+    const textToEmbed = `Title: ${metadata.title}
+Description: ${metadata.description}
+Keywords: ${metadata.tags.join(", ")}
+Category: ${metadata.category}
+
+Content:
+${content.substring(0, 8000)}`.trim();
+
+    const result = await geminiAI.models.embedContent({
+      model: "text-embedding-004",
+      content: textToEmbed,
+    });
+
+    const embedding = result.embedding.values;
+    logger.info(`✓ Generated embedding with ${embedding.length} dimensions`);
+    return embedding;
+  } catch (error) {
+    logger.error("Failed to generate embedding:", error);
+    // Return null to allow processing to finish without embedding
+    return null;
+  }
 }
 
 function generateContentHash(content) {

@@ -136,15 +136,22 @@ export default function Explore() {
 
       const newDocs = response.data.documents || [];
 
-      setCategoriesData((prev) => ({
-        ...prev,
-        [categoryId]: {
-          documents: [...(prev[categoryId]?.documents || []), ...newDocs],
-          hasMore: newDocs.length === DOCS_PER_PAGE && 
-                   (prev[categoryId]?.documents.length || 0) + newDocs.length < MAX_DOCS,
-          offset: offset + DOCS_PER_PAGE,
-        },
-      }));
+      setCategoriesData((prev) => {
+        const existingDocs = prev[categoryId]?.documents || [];
+        const existingIds = new Set(existingDocs.map(doc => doc._id));
+        
+        const uniqueNewDocs = newDocs.filter(doc => !existingIds.has(doc._id));
+        const allDocs = [...existingDocs, ...uniqueNewDocs];
+
+        return {
+          ...prev,
+          [categoryId]: {
+            documents: allDocs,
+            hasMore: newDocs.length === DOCS_PER_PAGE && allDocs.length < MAX_DOCS,
+            offset: offset + DOCS_PER_PAGE,
+          },
+        };
+      });
     } catch (error) {
       console.error(`Failed to load documents for ${categoryId}:`, error);
       setCategoriesData((prev) => ({

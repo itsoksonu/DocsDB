@@ -158,16 +158,6 @@ export default function Home() {
         />
         <meta property="og:type" content="website" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="true"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
       </Head>
 
       <div className="min-h-screen bg-dark-950 text-white">
