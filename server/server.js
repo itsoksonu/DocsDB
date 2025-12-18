@@ -103,7 +103,7 @@ async function startServer() {
     await databaseManager.connectMongo();
     await databaseManager.connectRedis();
 
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 DocsDB Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV}`);
       console.log(`🔗 Health check: http://localhost:${PORT}/health`);

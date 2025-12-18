@@ -1,0 +1,10 @@
+node_modules
+logs
+.env
+.git
+.DS_Store
+coverage
+dist
+temp
+tmp
+eng.traineddata

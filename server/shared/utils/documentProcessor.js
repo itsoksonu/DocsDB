@@ -11,6 +11,7 @@ import { createRequire } from "module";
 import { GoogleGenAI } from "@google/genai";
 import { HfInference } from "@huggingface/inference";
 import Groq from "groq-sdk";
+import { Jimp, loadFont } from "jimp";
 
 const require = createRequire(import.meta.url);
 const execAsync = promisify(exec);
@@ -20,18 +21,14 @@ try {
   const rawPdfParse = require("pdf-parse");
   // Handle different export formats
   pdfParse = rawPdfParse.default || rawPdfParse;
-  logger.info("pdf-parse loaded successfully", { type: typeof pdfParse });
 } catch (error) {
   logger.error("Failed to load pdf-parse:", error);
   pdfParse = null;
 }
 
-logger.info("pdf-parse typeof", { type: typeof pdfParse });
-
 const { PDFDocument } = require("pdf-lib");
 const Tesseract = require("tesseract.js");
 import { pdfToImg } from "pdftoimg-js";
-import { Jimp } from "jimp";
 
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -45,7 +42,7 @@ const huggingface = HUGGINGFACE_TOKEN
   : null;
 const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null;
 
-let mammoth, XLSX;
+let mammoth, XLSX, NodeClam;
 
 async function ensureDependencies() {
   if (!mammoth) {
@@ -53,6 +50,45 @@ async function ensureDependencies() {
   }
   if (!XLSX) {
     XLSX = (await import("xlsx")).default;
+  }
+  if (!NodeClam) {
+    const clamscanModule = await import("clamscan");
+    NodeClam = clamscanModule.default;
+    logger.info("NodeClam loaded successfully", { type: typeof NodeClam });
+  }
+}
+
+async function testClamAVConnection() {
+  try {
+    const net = await import("net");
+
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        resolve(false);
+      }, 3000);
+
+      socket.connect(3310, "localhost", () => {
+        clearTimeout(timeout);
+        socket.write("PING\n");
+      });
+
+      socket.on("data", (data) => {
+        clearTimeout(timeout);
+        const response = data.toString();
+        socket.destroy();
+        resolve(response.includes("PONG"));
+      });
+
+      socket.on("error", () => {
+        clearTimeout(timeout);
+        socket.destroy();
+        resolve(false);
+      });
+    });
+  } catch (error) {
+    return false;
   }
 }
 
@@ -68,9 +104,13 @@ export async function processDocument(documentId, s3Key) {
   try {
     await ensureDependencies();
 
-    // Perform actual virus scan
-    const virusScanResult = await performVirusScan(s3Key);
+    // Download file first for scanning and processing
+    filePath = await downloadFromS3(s3Key);
+
+    // Perform actual virus scan on local file
+    const virusScanResult = await performVirusScan(filePath);
     if (!virusScanResult.clean) {
+      await cleanupTempFile(filePath); // Clean up infected file early
       throw new Error(
         `Virus scan failed: ${
           virusScanResult.details || "Malicious content detected"
@@ -78,7 +118,7 @@ export async function processDocument(documentId, s3Key) {
       );
     }
 
-    filePath = await downloadFromS3(s3Key);
+    // Proceed with processing since clean
     const content = await extractContent(filePath, document.fileType);
 
     if (!content || content.trim().length === 0) {
@@ -135,255 +175,189 @@ export async function processDocument(documentId, s3Key) {
   }
 }
 
-async function performVirusScan(s3Key) {
+async function performVirusScan(filePath) {
   try {
-    logger.info(`Starting virus scan for: ${s3Key}`);
+    logger.info(`Starting ClamAV scan for: ${filePath}`);
 
-    const vtApiKey = process.env.VIRUSTOTAL_API_KEY;
-    if (!vtApiKey) {
-      logger.warn("⚠️ VirusTotal API key not configured, using basic validation");
-      return await performBasicFileValidation(s3Key);
+    // Basic validation first (quick checks)
+    const basicResult = await performBasicFileValidationFromPath(filePath);
+    if (!basicResult.clean) {
+      return basicResult;
     }
 
-    return await scanWithVirusTotal(s3Key, vtApiKey);
-  } catch (error) {
-    logger.error(`Virus scan failed for ${s3Key}:`, error);
-    // Fallback to basic validation instead of throwing
-    return await performBasicFileValidation(s3Key);
-  }
-}
-
-async function scanWithVirusTotal(s3Key, apiKey) {
-  try {
-    const fileBuffer = await S3Manager.getObjectBuffer(s3Key);
-    const fileSize = fileBuffer.length;
-
-    // VirusTotal has a 32MB limit for direct uploads
-    if (fileSize > 32 * 1024 * 1024) {
-      logger.warn(`File too large for VirusTotal (${fileSize} bytes), using basic validation`);
-      return await performBasicFileValidation(s3Key);
+    // Check if ClamAV daemon is running
+    const clamavReady = await testClamAVConnection();
+    if (!clamavReady) {
+      logger.warn(
+        "ClamAV daemon not responding on port 3310, using basic validation only"
+      );
+      return await performBasicFileValidationFromPath(filePath);
     }
 
-    const FormData = (await import("form-data")).default;
-    const form = new FormData();
-    const filename = s3Key.split("/").pop();
-    form.append("file", fileBuffer, {
-      filename: filename,
-      contentType: "application/octet-stream",
+    // Ensure NodeClam is loaded
+    await ensureDependencies();
+
+    if (!NodeClam) {
+      logger.error(
+        "NodeClam module not loaded properly, falling back to basic validation"
+      );
+      return await performBasicFileValidationFromPath(filePath);
+    }
+
+    // Init NodeClam (clamscan v2.4.0 pattern)
+    const clamscan = await new NodeClam().init({
+      clamdscan: {
+        socket: false,
+        host: "localhost",
+        port: 3310,
+        timeout: 60000,
+      },
+      preference: "clamdscan",
+      debugMode: false,
     });
 
-    // Upload file to VirusTotal
-    logger.info("📤 Uploading file to VirusTotal...");
+    const { isInfected, viruses } = await clamscan.scanFile(filePath);
 
-    // Use node https + form pipe
-    const uploadResponse = await new Promise((resolve, reject) => {
-      const options = {
-        method: "POST",
-        headers: {
-          "x-apikey": apiKey,
-          ...form.getHeaders(),
-        },
+    if (isInfected) {
+      logger.error(
+        `🚨 THREAT DETECTED by ClamAV in ${filePath}: ${viruses.join(", ")}`
+      );
+      return {
+        clean: false,
+        scanner: "clamav",
+        scannedAt: new Date(),
+        details: `Detected by ClamAV: ${viruses.join(", ")}`,
+        threat: "Malware detected",
+        clamavResults: { viruses, isInfected },
       };
-
-      const https = require("https");
-      const req = https.request(
-        "https://www.virustotal.com/api/v3/files",
-        options,
-        (res) => {
-          let data = "";
-          res.on("data", (chunk) => (data += chunk));
-          res.on("end", () => {
-            resolve({
-              ok: res.statusCode >= 200 && res.statusCode < 300,
-              status: res.statusCode,
-              text: () => Promise.resolve(data),
-              json: () => Promise.resolve(JSON.parse(data)),
-            });
-          });
-        }
-      );
-
-      req.on("error", reject);
-      form.pipe(req);
-    });
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      logger.error(`VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`);
-      throw new Error(`VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`);
     }
 
-    const uploadData = await uploadResponse.json();
-    const analysisId = uploadData.data.id;
-
-    logger.info(`✓ File uploaded. Analysis ID: ${analysisId}`);
-
-    // Poll for analysis results with exponential backoff
-    let attempts = 0;
-    const maxAttempts = 15;
-    let waitTime = 2000; // Start with 2 seconds
-
-    while (attempts < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
-
-      logger.info(`🔍 Checking analysis status (attempt ${attempts + 1}/${maxAttempts})...`);
-
-      const analysisResponse = await fetch(
-        `https://www.virustotal.com/api/v3/analyses/${analysisId}`,
-        {
-          headers: { "x-apikey": apiKey },
-        }
-      );
-
-      if (!analysisResponse.ok) {
-        throw new Error(`Failed to fetch analysis: ${analysisResponse.status}`);
-      }
-
-      const analysisData = await analysisResponse.json();
-      const status = analysisData.data.attributes.status;
-
-      if (status === "completed") {
-        const stats = analysisData.data.attributes.stats;
-        const malicious = stats.malicious || 0;
-        const suspicious = stats.suspicious || 0;
-        const undetected = stats.undetected || 0;
-        const harmless = stats.harmless || 0;
-
-        logger.info(
-          `📊 Scan results: Malicious: ${malicious}, Suspicious: ${suspicious}, Harmless: ${harmless}, Undetected: ${undetected}`
-        );
-
-        // Strict detection: Any malicious or more than 2 suspicious flags
-        if (malicious > 0 || suspicious > 2) {
-          logger.error(`🚨 THREAT DETECTED in ${s3Key}`);
-          return {
-            clean: false,
-            scanner: "virustotal",
-            scannedAt: new Date(),
-            details: `Detected by ${malicious} engines as malicious (${suspicious} flagged as suspicious)`,
-            threat: malicious > 0 ? "Malware detected" : "Suspicious content detected",
-            vtResults: stats,
-            analysisId: analysisId,
-          };
-        }
-
-        logger.info(`✅ VirusTotal scan completed: ${s3Key} is CLEAN`);
-        return {
-          clean: true,
-          scanner: "virustotal",
-          scannedAt: new Date(),
-          details: `Scanned by ${harmless + undetected} engines - Clean`,
-          vtResults: stats,
-          analysisId: analysisId,
-        };
-      }
-
-      // Exponential backoff: increase wait time
-      waitTime = Math.min(waitTime * 1.5, 10000); // Max 10 seconds
-      attempts++;
-    }
-
-    // Timeout reached - be cautious
-    logger.warn("⏱️ VirusTotal scan timeout - flagging for manual review");
+    logger.info(`✅ ClamAV scan completed: ${filePath} is CLEAN`);
     return {
-      clean: false,
-      scanner: "virustotal",
+      clean: true,
+      scanner: "clamav",
       scannedAt: new Date(),
-      details: "Scan timeout - requires manual review",
-      threat: "Unable to complete scan",
-      warning: "MANUAL_REVIEW_REQUIRED",
+      details: "Scanned by ClamAV - Clean",
+      clamavResults: { viruses: [], isInfected: false },
     };
   } catch (error) {
-    logger.error("❌ VirusTotal scan error:", {
-      message: error.message,
+    logger.error(`ClamAV scan failed for ${filePath}:`, {
+      error: error.message,
       stack: error.stack,
-      s3Key: s3Key,
     });
     // Fallback to basic validation
-    return await performBasicFileValidation(s3Key);
+    return await performBasicFileValidationFromPath(filePath);
   }
 }
 
-async function performBasicFileValidation(s3Key) {
-  const fileBuffer = await S3Manager.getObjectBuffer(s3Key);
-  const fileExtension = s3Key.split(".").pop().toLowerCase();
+async function performBasicFileValidationFromPath(filePath) {
+  const fs = await import("fs");
+  try {
+    const fileBuffer = await fs.promises.readFile(filePath);
+    const fileExtension = path.extname(filePath).slice(1).toLowerCase();
 
-  // 1. Block dangerous extensions
-  const dangerousExtensions = [
-    "exe", "bat", "cmd", "scr", "pif", "com", "vbs", "js", "jar", 
-    "wsf", "msi", "app", "deb", "rpm", "dmg", "pkg", "run", "bin"
-  ];
+    // 1. Block dangerous extensions
+    const dangerousExtensions = [
+      "exe",
+      "bat",
+      "cmd",
+      "scr",
+      "pif",
+      "com",
+      "vbs",
+      "js",
+      "jar",
+      "wsf",
+      "msi",
+      "app",
+      "deb",
+      "rpm",
+      "dmg",
+      "pkg",
+      "run",
+      "bin",
+    ];
 
-  if (dangerousExtensions.includes(fileExtension)) {
-    return {
-      clean: false,
-      scanner: "basic-validation",
-      scannedAt: new Date(),
-      details: `Blocked executable file type: .${fileExtension}`,
-      threat: "Executable file type blocked",
-    };
-  }
-
-  // 2. Validate file size
-  if (fileBuffer.length === 0) {
-    return {
-      clean: false,
-      scanner: "basic-validation",
-      scannedAt: new Date(),
-      details: "Empty file detected",
-      threat: "Invalid file",
-    };
-  }
-
-  if (fileBuffer.length > 50 * 1024 * 1024) {
-    return {
-      clean: false,
-      scanner: "basic-validation",
-      scannedAt: new Date(),
-      details: "File exceeds 50MB limit",
-      threat: "File too large",
-    };
-  }
-
-  // 3. Check file signature (magic numbers)
-  const isValidFileType = validateFileSignature(fileBuffer, fileExtension);
-  if (!isValidFileType) {
-    return {
-      clean: false,
-      scanner: "basic-validation",
-      scannedAt: new Date(),
-      details: "File signature doesn't match extension",
-      threat: "Potential file spoofing",
-    };
-  }
-
-  // 4. Scan for suspicious patterns
-  const suspiciousPatterns = [
-    Buffer.from("eval("),
-    Buffer.from("<script"),
-    Buffer.from("<?php"),
-    Buffer.from("#!/bin/"),
-  ];
-
-  for (const pattern of suspiciousPatterns) {
-    if (fileBuffer.includes(pattern)) {
-      logger.warn(`Suspicious pattern found in ${s3Key}`);
+    if (dangerousExtensions.includes(fileExtension)) {
       return {
         clean: false,
         scanner: "basic-validation",
         scannedAt: new Date(),
-        details: "Suspicious code pattern detected",
-        threat: "Potentially malicious content",
+        details: `Blocked executable file type: .${fileExtension}`,
+        threat: "Executable file type blocked",
       };
     }
-  }
 
-  return {
-    clean: true,
-    scanner: "basic-validation",
-    scannedAt: new Date(),
-    details: "Basic validation passed",
-  };
+    // 2. Validate file size
+    if (fileBuffer.length === 0) {
+      return {
+        clean: false,
+        scanner: "basic-validation",
+        scannedAt: new Date(),
+        details: "Empty file detected",
+        threat: "Invalid file",
+      };
+    }
+
+    if (fileBuffer.length > 50 * 1024 * 1024) {
+      return {
+        clean: false,
+        scanner: "basic-validation",
+        scannedAt: new Date(),
+        details: "File exceeds 50MB limit",
+        threat: "File too large",
+      };
+    }
+
+    // 3. Check file signature (magic numbers)
+    const isValidFileType = validateFileSignature(fileBuffer, fileExtension);
+    if (!isValidFileType) {
+      return {
+        clean: false,
+        scanner: "basic-validation",
+        scannedAt: new Date(),
+        details: "File signature doesn't match extension",
+        threat: "Potential file spoofing",
+      };
+    }
+
+    // 4. Scan for suspicious patterns
+    const suspiciousPatterns = [
+      Buffer.from("eval("),
+      Buffer.from("<script"),
+      Buffer.from("<?php"),
+      Buffer.from("#!/bin/"),
+    ];
+
+    for (const pattern of suspiciousPatterns) {
+      if (fileBuffer.includes(pattern)) {
+        logger.warn(`Suspicious pattern found in ${filePath}`);
+        return {
+          clean: false,
+          scanner: "basic-validation",
+          scannedAt: new Date(),
+          details: "Suspicious code pattern detected",
+          threat: "Potentially malicious content",
+        };
+      }
+    }
+
+    return {
+      clean: true,
+      scanner: "basic-validation",
+      scannedAt: new Date(),
+      details: "Basic validation passed",
+    };
+  } catch (error) {
+    logger.error(`Basic validation failed for ${filePath}:`, error);
+    return {
+      clean: false,
+      scanner: "basic-validation",
+      scannedAt: new Date(),
+      details: "Validation error",
+      threat: "Unable to validate file",
+    };
+  }
 }
 
 function validateFileSignature(buffer, extension) {
@@ -406,7 +380,9 @@ function validateFileSignature(buffer, extension) {
 
 async function generateThumbnail(filePath, fileType) {
   try {
-    logger.info(`🎨 Generating first page thumbnail for ${fileType}: ${filePath}`);
+    logger.info(
+      `🎨 Generating first page thumbnail for ${fileType}: ${filePath}`
+    );
 
     const fs = await import("fs");
 
@@ -429,8 +405,10 @@ async function generateThumbnail(filePath, fileType) {
         return await generatePPTXFirstPageThumbnail(filePath);
 
       case "xlsx":
+        return await generateSpreadsheetFirstPageThumbnail(filePath);
+
       case "csv":
-        return await generateSpreadsheetFirstPageThumbnail(filePath, fileType);
+        return await generateCSVFirstPageThumbnail(filePath);
 
       default:
         return await generateFallbackThumbnail(fileType);
@@ -470,9 +448,7 @@ async function generatePDFFirstPageThumbnail(filePath) {
 
     const outPath = path.join(
       tmpdir(),
-      `pdf-thumb-${Date.now()}-${Math.random()
-        .toString(16)
-        .slice(2)}.jpg`
+      `pdf-thumb-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
     );
 
     await fs.promises.writeFile(outPath, buffer);
@@ -490,28 +466,250 @@ async function generatePDFFirstPageThumbnail(filePath) {
       stack: err.stack,
     });
 
-    // Fallback: generic thumbnail
-    return await generateFallbackThumbnail("pdf");
+    return generateTypeBadgeThumbnail("PDF", "pdf", 0xdc2626ff);
   }
 }
 
+async function convertDOCXToPDF(docxPath) {
+  const pdfPath = docxPath.replace(/\.docx$/i, ".pdf");
+
+  await execAsync(
+    `libreoffice --headless --convert-to pdf "${docxPath}" --outdir "${path.dirname(docxPath)}"`
+  );
+
+  return pdfPath;
+}
+
 async function generateDOCXFirstPageThumbnail(filePath) {
-  // actual DOCX rendering is complex + heavy;
-  // this gives a nice type badge instead and is fully portable
-  return generateTypeBadgeThumbnail("DOCX", "docx", 0x4f6bedff);
+  try {
+    logger.info("Converting DOCX → PDF for thumbnail", { filePath });
+
+    const pdfPath = await convertDOCXToPDF(filePath);
+
+    const thumbPath = await generatePDFFirstPageThumbnail(pdfPath);
+
+    await cleanupTempFile(pdfPath);
+
+    return thumbPath;
+  } catch (error) {
+    logger.error("DOCX thumbnail generation failed, using fallback", {
+      error: error.message,
+    });
+    return generateTypeBadgeThumbnail("DOCX", "docx", 0x4f6bedff);
+  }
+}
+
+async function convertPPTXToPDF(pptxPath) {
+  const pdfPath = pptxPath.replace(/\.pptx$/i, ".pdf");
+
+  await execAsync(
+    `libreoffice --headless --convert-to pdf "${pptxPath}" --outdir "${path.dirname(pptxPath)}"`,
+    { timeout: 30000 }
+  );
+
+  return pdfPath;
 }
 
 async function generatePPTXFirstPageThumbnail(filePath) {
-  return generateTypeBadgeThumbnail("PPTX", "pptx", 0xd24726ff);
+  try {
+    logger.info("Converting PPTX → PDF for thumbnail", { filePath });
+
+    const pdfPath = await convertPPTXToPDF(filePath);
+
+    const thumbPath = await generatePDFFirstPageThumbnail(pdfPath);
+
+    await cleanupTempFile(pdfPath);
+
+    return thumbPath;
+  } catch (error) {
+    logger.error("PPTX thumbnail generation failed, using fallback", {
+      error: error.message,
+    });
+
+    return generateTypeBadgeThumbnail("PPTX", "pptx", 0xd24726ff);
+  }
+}
+
+async function convertXLSXToHTML(xlsxPath) {
+  const XLSX = (await import("xlsx")).default;
+  const fs = await import("fs");
+
+  const workbook = XLSX.readFile(xlsxPath);
+  const firstSheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[firstSheetName];
+
+  const html = XLSX.utils.sheet_to_html(worksheet, {
+    editable: false,
+  });
+
+  const htmlPath = xlsxPath.replace(/\.xlsx$/i, ".html");
+  await fs.promises.writeFile(htmlPath, `
+    <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 0; padding: 10px; }
+          table { border-collapse: collapse; font-size: 12px; }
+          td, th {
+            border: 1px solid #ccc;
+            padding: 4px 6px;
+            white-space: nowrap;
+          }
+        </style>
+      </head>
+      <body>${html}</body>
+    </html>
+  `);
+
+  return htmlPath;
+}
+
+async function htmlToImage(htmlPath) {
+  const puppeteer = await import("puppeteer");
+
+  const browser = await puppeteer.launch({
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1200, height: 1600 });
+
+  await page.goto(`file://${htmlPath}`, { waitUntil: "networkidle0" });
+
+  const outPath = htmlPath.replace(/\.html$/, ".jpg");
+
+  await page.screenshot({
+    path: outPath,
+    fullPage: true,
+    type: "jpeg",
+    quality: 85,
+  });
+
+  await browser.close();
+
+  return outPath;
 }
 
 async function generateSpreadsheetFirstPageThumbnail(filePath) {
-  // for XLSX, CSV, etc.
-  return generateTypeBadgeThumbnail("SHEET", "sheet", 0x217346ff);
+  try {
+    logger.info("Generating XLSX first-sheet thumbnail", { filePath });
+
+    const htmlPath = await convertXLSXToHTML(filePath);
+    const imagePath = await htmlToImage(htmlPath);
+
+    await cleanupTempFile(htmlPath);
+
+    return imagePath;
+  } catch (error) {
+    logger.error("XLSX thumbnail generation failed, using fallback", {
+      error: error.message,
+    });
+
+    return generateTypeBadgeThumbnail("SHEET", "sheet", 0x217346ff);
+  }
+}
+
+async function convertCSVToHTML(csvPath, options = {}) {
+  const fs = await import("fs");
+
+  const {
+    maxRows = 30,
+    maxCols = 10,
+  } = options;
+
+  const raw = await fs.promises.readFile(csvPath, "utf8");
+
+  const lines = raw.split(/\r?\n/).filter(Boolean).slice(0, maxRows);
+  const rows = lines.map(line =>
+    line.split(",").slice(0, maxCols)
+  );
+
+  const tableRows = rows
+    .map(
+      (cols, i) => `
+        <tr>
+          ${cols
+            .map(
+              (cell) =>
+                `<${i === 0 ? "th" : "td"}>${escapeHTML(cell)}</${i === 0 ? "th" : "td"}>`
+            )
+            .join("")}
+        </tr>
+      `
+    )
+    .join("");
+
+  const html = `
+  <html>
+    <head>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          margin: 0;
+          padding: 12px;
+          background: white;
+        }
+        table {
+          border-collapse: collapse;
+          font-size: 12px;
+          max-width: 100%;
+        }
+        th, td {
+          border: 1px solid #ccc;
+          padding: 4px 6px;
+          max-width: 140px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        th {
+          background: #f3f4f6;
+          font-weight: 600;
+        }
+      </style>
+    </head>
+    <body>
+      <table>${tableRows}</table>
+    </body>
+  </html>
+  `;
+
+  const htmlPath = csvPath.replace(/\.csv$/i, ".html");
+  await fs.promises.writeFile(htmlPath, html);
+
+  return htmlPath;
+}
+
+function escapeHTML(text = "") {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+async function generateCSVFirstPageThumbnail(filePath) {
+  try {
+    logger.info("Generating CSV preview thumbnail", { filePath });
+
+    const htmlPath = await convertCSVToHTML(filePath, {
+      maxRows: 30,
+      maxCols: 10,
+    });
+
+    const imagePath = await htmlToImage(htmlPath);
+
+    await cleanupTempFile(htmlPath);
+
+    return imagePath;
+  } catch (error) {
+    logger.error("CSV thumbnail generation failed, using fallback", {
+      error: error.message,
+    });
+
+    return generateTypeBadgeThumbnail("CSV", "csv", 0x6b7280ff);
+  }
 }
 
 async function generateTypeBadgeThumbnail(label, fileTypeForName, bgColorHex) {
-  const fs = await import("fs");
   const outFileName = `thumb-${fileTypeForName}-${Date.now()}-${Math.random()
     .toString(16)
     .slice(2)}.png`;
@@ -519,35 +717,95 @@ async function generateTypeBadgeThumbnail(label, fileTypeForName, bgColorHex) {
   const width = 320;
   const height = 400;
 
-  // bgColorHex: 0xRRGGBBAA (e.g. 0x4f6bedff)
-  const image = new Jimp({ width, height, color: bgColorHex });
+  // Capture original for logging
+  const originalColor = bgColorHex;
 
-  // Load built-in Jimp font
-  const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+  // Safe default & conversion: Handle string hex or existing number; default white int (0xFFFFFFFF)
+  let colorNum = 0xffffffff; // Default white with full alpha
+  if (typeof bgColorHex === "string") {
+    if (bgColorHex.match(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)) {
+      const hexClean = bgColorHex.replace("#", "").padEnd(6, "0").toUpperCase();
+      const r = parseInt(hexClean.substring(0, 2), 16) || 255;
+      const g = parseInt(hexClean.substring(2, 4), 16) || 255;
+      const b = parseInt(hexClean.substring(4, 6), 16) || 255;
+      // Manual RGBA to int (ARGB format: 0xAARRGGBB; no Jimp.rgbaToInt in v1.6.0)
+      colorNum = ((255 << 24) | (r << 16) | (g << 8) | b) >>> 0; // >>> 0 ensures uint32
+    } else {
+      logger.warn("Invalid hex string bgColorHex; defaulting to white int", {
+        original: originalColor,
+        label,
+        fileTypeForName,
+      });
+    }
+  } else if (typeof bgColorHex === "number") {
+    // If already a number, clamp to uint32 range (0-0xFFFFFFFF)
+    colorNum = Math.max(0, Math.min(bgColorHex, 0xffffffff)) >>> 0;
+    if (colorNum !== bgColorHex) {
+      logger.warn("Clamped out-of-range number bgColorHex to white int", {
+        original: originalColor,
+        label,
+        fileTypeForName,
+      });
+    }
+  } else {
+    logger.warn(
+      "Invalid non-string/non-number bgColorHex; defaulting to white int",
+      { original: originalColor, label, fileTypeForName }
+    );
+  }
 
-  image.print(
-    font,
-    0,
-    0,
-    {
-      text: label,
-      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-      alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE,
-    },
-    width,
-    height
-  );
+  try {
+    // Docs-style constructor: Numeric color (as per hover/docs example)
+    const image = new Jimp({ width, height, color: colorNum });
 
-  const outPath = path.join(tmpdir(), outFileName);
-  await image.write(outPath);
+    // Async loadFont (v1.x)
+    const font = await loadFont(Jimp.FONT_SANS_32_WHITE);
 
-  logger.info("Generated type badge thumbnail", {
-    label,
-    fileTypeForName,
-    outPath,
-  });
+    // Print text (your existing code)
+    image.print({
+      font,
+      x: 0,
+      y: 0,
+      text: {
+        text: label,
+        alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+        alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE,
+      },
+      maxWidth: width,
+      maxHeight: height * 0.8,
+    });
 
-  return outPath;
+    const outPath = path.join(tmpdir(), outFileName);
+    await image.write(outPath);
+
+    logger.info("Generated type badge thumbnail", {
+      label,
+      fileTypeForName,
+      outPath,
+    });
+
+    return outPath;
+  } catch (error) {
+    logger.error("Failed to generate type badge thumbnail:", error);
+
+    // Fallback: Simple colored image (docs-style, no text)
+    try {
+      const simpleImage = new Jimp({ width, height, color: colorNum });
+      const outPath = path.join(tmpdir(), outFileName);
+      await simpleImage.write(outPath);
+
+      logger.info("Generated simple colored thumbnail (no text)", {
+        label,
+        fileTypeForName,
+        outPath,
+      });
+
+      return outPath;
+    } catch (fallbackError) {
+      logger.error("Failed to generate even simple thumbnail:", fallbackError);
+      throw fallbackError;
+    }
+  }
 }
 
 async function generateFallbackThumbnail(fileType) {
@@ -625,10 +883,10 @@ async function extractFromPDF(filePath) {
   const fs = await import("fs");
 
   try {
-    if (!pdfParse || typeof pdfParse !== 'function') {
+    if (!pdfParse || typeof pdfParse !== "function") {
       logger.warn("pdf-parse not available, falling back to OCR");
       const ocrText = await extractPDFWithOCR(filePath, 5);
-      
+
       if (!ocrText || !ocrText.trim()) {
         throw new Error("No OCR text extracted from PDF images");
       }
@@ -842,12 +1100,7 @@ async function generateEnhancedMetadata(content, filename, fileType) {
     const groqResult = await generateWithGroq(content, filename);
     if (groqResult?.title) {
       logger.info("Used Groq for metadata");
-      return enrichMetadataWithLocalData(
-        groqResult,
-        content,
-        fileType,
-        "groq"
-      );
+      return enrichMetadataWithLocalData(groqResult, content, fileType, "groq");
     }
   } catch (error) {
     logger.warn(`Groq failed: ${error.message}`);
@@ -1030,7 +1283,12 @@ function parseAIResponse(text) {
   }
 }
 
-function enrichMetadataWithLocalData(aiMetadata, content, fileType, generatedBy) {
+function enrichMetadataWithLocalData(
+  aiMetadata,
+  content,
+  fileType,
+  generatedBy
+) {
   return {
     ...aiMetadata,
     pageCount: estimatePageCount(content),
@@ -1482,7 +1740,10 @@ async function getAccuratePageCount(filePath, fileType, content) {
         return estimatePageCount(content);
     }
   } catch (error) {
-    logger.error(`Error calculating page count for ${fileType}:`, error.message);
+    logger.error(
+      `Error calculating page count for ${fileType}:`,
+      error.message
+    );
     return estimatePageCount(content);
   }
 }
@@ -1518,7 +1779,9 @@ async function getDOCXPageCount(filePath, content) {
       Math.round((pagesByWords + pagesByChars) / 2)
     );
 
-    logger.info(`✓ DOCX estimated page count: ${pageCount} (${wordCount} words)`);
+    logger.info(
+      `✓ DOCX estimated page count: ${pageCount} (${wordCount} words)`
+    );
     return pageCount;
   } catch (error) {
     logger.error("Failed to estimate DOCX page count:", error.message);
@@ -1606,7 +1869,7 @@ ${content.substring(0, 8000)}`.trim();
   } catch (error) {
     logger.error("Failed to generate embedding:", {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
     });
     // Return null to allow processing to finish without embedding
     return null;
