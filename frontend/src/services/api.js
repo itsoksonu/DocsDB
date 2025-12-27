@@ -264,6 +264,11 @@ class APIService {
     return response.data;
   }
 
+  async deleteDocument(documentId) {
+    const response = await this.client.delete(`/documents/${documentId}`);
+    return response.data;
+  }
+
   // documents endpoints
   async getUserDocuments(params = {}) {
     const response = await this.client.get("/documents/user/my-documents", {

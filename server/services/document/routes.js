@@ -329,11 +329,27 @@ router.delete(
         });
       }
 
+      try {
+        if (document.s3Path) {
+          await S3Manager.deleteObject(document.s3Path);
+          // Also delete thumbnail if it exists
+          if (document.thumbnailS3Path) {
+            await S3Manager.deleteObject(document.thumbnailS3Path).catch(
+              (err) =>
+                logger.warn(
+                  `Failed to delete thumbnail for document ${id}:`,
+                  err
+                )
+            );
+          }
+        }
+      } catch (s3Error) {
+        logger.error(`Failed to delete S3 object for document ${id}:`, s3Error);
+        // Continue with DB deletion even if S3 fails, but log it
+      }
+
       document.status = "deleted";
       await document.save();
-
-      // In production, might want to actually delete from S3
-      // await S3Manager.deleteObject(document.s3Path);
 
       res.json({
         success: true,

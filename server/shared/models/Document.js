@@ -19,7 +19,7 @@ const documentSchema = new mongoose.Schema({
     thumbnailS3Path: String,
     status: {
       type: String,
-    enum: ['uploaded', 'processing', 'processed', 'failed', 'quarantined', 'rejected'],
+    enum: ['uploaded', 'processing', 'processed', 'failed', 'quarantined', 'rejected', 'deleted'],
     default: 'uploaded',
     index: true
     },
