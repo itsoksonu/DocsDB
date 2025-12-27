@@ -173,6 +173,7 @@ router.get(
       .optional()
       .isIn(["uploaded", "processing", "processed", "failed", "all"])
       .default("all"),
+    query("search").optional().isString().trim(),
   ],
   async (req, res, next) => {
     try {
@@ -183,10 +184,10 @@ router.get(
           .json({ success: false, message: "Invalid parameters" });
       }
 
-      const { cursor, limit, status } = req.query;
+      const { cursor, limit, status, search } = req.query;
       const userId = req.user.userId;
 
-      const cacheKey = `mydocs:${userId}:${status}:${
+      const cacheKey = `mydocs:${userId}:${status}:${search || "all"}:${
         cursor || "initial"
       }:${limit}`;
 
@@ -197,7 +198,19 @@ router.get(
         }
       }
 
-      let query = { userId, status: "processed" };
+      let query = { userId };
+      if (status !== "all") {
+        query.status = status;
+      } else {
+        query.status = { $ne: "deleted" };
+      }
+
+      if (search) {
+        query.$or = [
+          { originalFilename: { $regex: search, $options: "i" } },
+          { generatedTitle: { $regex: search, $options: "i" } },
+        ];
+      }
 
       const mongoQuery = Document.find(query)
         .sort({ _id: -1 })
@@ -601,6 +614,7 @@ router.get(
   [
     query("cursor").optional().isString(),
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
+    query("search").optional().isString().trim(),
   ],
   async (req, res, next) => {
     try {
@@ -611,10 +625,12 @@ router.get(
           .json({ success: false, message: "Invalid parameters" });
       }
 
-      const { cursor, limit } = req.query;
+      const { cursor, limit, search } = req.query;
       const userId = req.user.userId;
 
-      const cacheKey = `saveddocs:${userId}:${cursor || "initial"}:${limit}`;
+      const cacheKey = `saveddocs:${userId}:${search || "all"}:${
+        cursor || "initial"
+      }:${limit}`;
 
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
@@ -630,7 +646,17 @@ router.get(
         populate: { path: "userId", select: "name" },
       });
 
-      const valid = user.savedDocuments.filter((d) => d.documentId !== null);
+      let valid = user.savedDocuments.filter((d) => d.documentId !== null);
+
+      // Filter by search term if provided
+      if (search) {
+        const searchRegex = new RegExp(search, "i");
+        valid = valid.filter(
+          (d) =>
+            searchRegex.test(d.documentId.generatedTitle) ||
+            searchRegex.test(d.documentId.originalFilename)
+        );
+      }
 
       const sorted = valid
         .sort((a, b) => b.savedAt - a.savedAt)
@@ -665,5 +691,33 @@ router.get(
     }
   }
 );
+
+// Get user stats
+router.get("/user/stats", authMiddleware, async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+
+    // Get uploaded count
+    const uploadedCount = await Document.countDocuments({
+      userId,
+      status: { $ne: "deleted" },
+    });
+
+    // Get saved count
+    const User = mongoose.model("User");
+    const user = await User.findById(userId);
+    const savedCount = user ? user.savedDocuments.length : 0;
+
+    res.json({
+      success: true,
+      data: {
+        uploadedCount,
+        savedCount,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;

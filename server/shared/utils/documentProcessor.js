@@ -20,13 +20,10 @@ try {
   const rawPdfParse = require("pdf-parse");
   // Handle different export formats
   pdfParse = rawPdfParse.default || rawPdfParse;
-  logger.info("pdf-parse loaded successfully", { type: typeof pdfParse });
 } catch (error) {
   logger.error("Failed to load pdf-parse:", error);
   pdfParse = null;
 }
-
-logger.info("pdf-parse typeof", { type: typeof pdfParse });
 
 const { PDFDocument } = require("pdf-lib");
 const Tesseract = require("tesseract.js");

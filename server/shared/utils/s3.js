@@ -3,11 +3,11 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
-  HeadObjectCommand 
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { v4 as uuidv4 } from 'uuid';
-import logger from './logger.js';
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { v4 as uuidv4 } from "uuid";
+import logger from "./logger.js";
 
 class S3Manager {
   constructor() {
@@ -15,8 +15,8 @@ class S3Manager {
       region: process.env.AWS_REGION,
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-      }
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
     });
 
     this.bucketName = process.env.S3_BUCKET_NAME;
@@ -30,13 +30,13 @@ class S3Manager {
         ContentType: fileType,
         ContentLength: fileSize,
         Metadata: {
-          uploadedAt: new Date().toISOString()
-        }
+          uploadedAt: new Date().toISOString(),
+        },
       });
 
       return await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
     } catch (error) {
-      logger.error('Error generating presigned URL:', error);
+      logger.error("Error generating presigned URL:", error);
       throw error;
     }
   }
@@ -46,12 +46,12 @@ class S3Manager {
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-        ResponseContentDisposition: `attachment; filename="${filename}"`
+        ResponseContentDisposition: `attachment; filename="${filename}"`,
       });
 
       return await getSignedUrl(this.s3Client, command, { expiresIn });
     } catch (error) {
-      logger.error('Error generating download URL:', error);
+      logger.error("Error generating download URL:", error);
       throw error;
     }
   }
@@ -59,7 +59,7 @@ class S3Manager {
   async generateViewUrl(key, expiresIn = 3600) {
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
-      Key: key
+      Key: key,
     });
     return await getSignedUrl(this.s3Client, command, { expiresIn });
   }
@@ -68,13 +68,13 @@ class S3Manager {
     try {
       const command = new HeadObjectCommand({
         Bucket: this.bucketName,
-        Key: key
+        Key: key,
       });
 
       const metadata = await this.s3Client.send(command);
       return metadata;
     } catch (error) {
-      logger.error('Error fetching S3 object metadata:', error);
+      logger.error("Error fetching S3 object metadata:", error);
       throw error;
     }
   }
@@ -83,13 +83,13 @@ class S3Manager {
     try {
       const command = new DeleteObjectCommand({
         Bucket: this.bucketName,
-        Key: key
+        Key: key,
       });
 
       await this.s3Client.send(command);
       logger.info(`Successfully deleted S3 object: ${key}`);
     } catch (error) {
-      logger.error('Error deleting S3 object:', error);
+      logger.error("Error deleting S3 object:", error);
       throw error;
     }
   }
@@ -100,14 +100,14 @@ class S3Manager {
         Bucket: this.bucketName,
         Key: key,
         Body: body,
-        ContentType: contentType
+        ContentType: contentType,
       });
 
       const result = await this.s3Client.send(command);
       logger.info(`Successfully uploaded S3 object: ${key}`);
       return result;
     } catch (error) {
-      logger.error('Error uploading S3 object:', error);
+      logger.error("Error uploading S3 object:", error);
       throw error;
     }
   }
@@ -116,20 +116,20 @@ class S3Manager {
     try {
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
-        Key: key
+        Key: key,
       });
 
       const result = await this.s3Client.send(command);
       return result;
     } catch (error) {
-      logger.error('Error getting S3 object:', error);
+      logger.error("Error getting S3 object:", error);
       throw error;
     }
   }
 
   async getObjectBuffer(key) {
     try {
-      const data = await this.getObject(key); 
+      const data = await this.getObject(key);
 
       if (!data || !data.Body) {
         throw new Error("S3: No Body returned for key " + key);
@@ -148,29 +148,42 @@ class S3Manager {
     }
   }
 
-  generateFileKey(userId, originalFilename) {
-    const extension = originalFilename.split('.').pop();
+  generateFileKey(userId, originalFilename, prefix = "uploads") {
+    const extension = originalFilename.split(".").pop();
     const timestamp = Date.now();
     const uniqueId = uuidv4();
 
-    return `uploads/${userId}/${timestamp}-${uniqueId}.${extension}`;
+    return `${prefix}/${userId}/${timestamp}-${uniqueId}.${extension}`;
   }
 
   // Validate file type
-  isValidFileType(mimeType, originalFilename) {
-    const allowedTypes = process.env.ALLOWED_FILE_TYPES?.split(',') || [];
-    const extension = originalFilename.split('.').pop().toLowerCase();
+  isValidFileType(mimeType, originalFilename, type = "document") {
+    let allowedTypes;
+
+    if (type === "avatar") {
+      allowedTypes = ["jpg", "jpeg", "png", "webp"];
+    } else {
+      allowedTypes = process.env.ALLOWED_FILE_TYPES?.split(",") || [];
+    }
+
+    const extension = originalFilename.split(".").pop().toLowerCase();
 
     const typeMap = {
-      'pdf': 'application/pdf',
-      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'csv': 'text/csv'
+      pdf: "application/pdf",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      csv: "text/csv",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
     };
 
-    return allowedTypes.includes(extension) && 
-           (!mimeType || mimeType === typeMap[extension]);
+    return (
+      allowedTypes.includes(extension) &&
+      (!mimeType || mimeType === typeMap[extension])
+    );
   }
 
   // Validate file size

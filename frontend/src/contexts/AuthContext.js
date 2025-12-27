@@ -141,6 +141,20 @@ export const AuthProvider = ({ children }) => {
     return response;
   };
 
+  const updateUser = async (data) => {
+    try {
+      const response = await apiService.updateProfile(data);
+      if (response && response.data && response.data.user) {
+        setUser(response.data.user);
+        return response.data.user;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error updating user:", error);
+      throw error;
+    }
+  };
+
   const handleGoogleOAuth = async (googleResponse) => {
     try {
       const credential = googleResponse.credential;
@@ -189,6 +203,7 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
+    updateUser,
     oauthLogin,
     handleGoogleOAuth,
     logout,

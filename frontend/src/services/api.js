@@ -38,32 +38,31 @@ class APIService {
         const originalRequest = error.config;
 
         // Don't intercept refresh token requests to avoid infinite loops
-        if (originalRequest.url?.includes('/auth/refresh')) {
+        if (originalRequest.url?.includes("/auth/refresh")) {
           return Promise.reject(error);
         }
 
         // Don't intercept logout requests
-        if (originalRequest.url?.includes('/auth/logout')) {
+        if (originalRequest.url?.includes("/auth/logout")) {
           return Promise.reject(error);
         }
 
-        if (
-          error.response?.status === 401 &&
-          !originalRequest._retry
-        ) {
+        if (error.response?.status === 401 && !originalRequest._retry) {
           if (this.isRefreshing) {
             // If refresh is already in progress, queue this request
             return new Promise((resolve, reject) => {
               this.failedQueue.push({ resolve, reject });
-            }).then(() => {
-              const token = localStorage.getItem("accessToken");
-              if (token) {
-                originalRequest.headers.Authorization = `Bearer ${token}`;
-              }
-              return this.client(originalRequest);
-            }).catch(err => {
-              return Promise.reject(err);
-            });
+            })
+              .then(() => {
+                const token = localStorage.getItem("accessToken");
+                if (token) {
+                  originalRequest.headers.Authorization = `Bearer ${token}`;
+                }
+                return this.client(originalRequest);
+              })
+              .catch((err) => {
+                return Promise.reject(err);
+              });
           }
 
           originalRequest._retry = true;
@@ -72,10 +71,11 @@ class APIService {
           try {
             console.log("API interceptor: Attempting token refresh...");
             const response = await this.refreshToken();
-            const accessToken = response.data?.data?.accessToken || response.data?.accessToken;
+            const accessToken =
+              response.data?.data?.accessToken || response.data?.accessToken;
 
             if (!accessToken) {
-              throw new Error('Invalid refresh response');
+              throw new Error("Invalid refresh response");
             }
 
             localStorage.setItem("accessToken", accessToken);
@@ -88,8 +88,11 @@ class APIService {
             originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             return this.client(originalRequest);
           } catch (refreshError) {
-            console.error("API interceptor: Token refresh failed", refreshError);
-            
+            console.error(
+              "API interceptor: Token refresh failed",
+              refreshError
+            );
+
             // Process queued requests with error
             this.processQueue(refreshError, null);
 
@@ -160,14 +163,29 @@ class APIService {
     return response.data;
   }
 
+  async updateProfile(data) {
+    const response = await this.client.patch("/auth/me", data);
+    return response.data;
+  }
+
   // Upload endpoints
   async getPresignedUrl(fileData) {
     const response = await this.client.post("/upload/presign", {
       fileName: fileData.fileName,
       fileType: fileData.fileType,
       fileSize: fileData.fileSize,
+      uploadType: fileData.uploadType || "document",
     });
     return response.data;
+  }
+
+  async uploadFileToS3(presignedUrl, file) {
+    const response = await axios.put(presignedUrl, file, {
+      headers: {
+        "Content-Type": file.type,
+      },
+    });
+    return response;
   }
 
   async completeUpload(completeData) {
@@ -233,7 +251,9 @@ class APIService {
   }
 
   async getSavedDocuments(params = {}) {
-    const response = await this.client.get("/documents/user/saved-documents", { params });
+    const response = await this.client.get("/documents/user/saved-documents", {
+      params,
+    });
     return response.data;
   }
 
@@ -246,7 +266,14 @@ class APIService {
 
   // documents endpoints
   async getUserDocuments(params = {}) {
-    const response = await this.client.get("/documents/user/my-documents", { params });
+    const response = await this.client.get("/documents/user/my-documents", {
+      params,
+    });
+    return response.data;
+  }
+
+  async getUserStats() {
+    const response = await this.client.get("/documents/user/stats");
     return response.data;
   }
 }
