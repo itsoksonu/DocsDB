@@ -41,7 +41,7 @@ export default function GlobalUploadWidget() {
         label: "Creating thumbnail",
         description: "Generating document preview",
       },
-      "finalizing": {
+      finalizing: {
         icon: Check,
         label: "Finalizing",
         description: "Almost done!",
@@ -79,12 +79,12 @@ export default function GlobalUploadWidget() {
       const status = response.data.status;
 
       if (status === "processed") {
-        updateUploadState({ 
-          status: "processed", 
-          processingStep: "finalizing" 
+        updateUploadState({
+          status: "processed",
+          processingStep: "finalizing",
         });
         toast.success("Document processed successfully!");
-        
+
         // Auto-close after 3 seconds
         setTimeout(() => {
           resetUploadState();
@@ -140,7 +140,7 @@ export default function GlobalUploadWidget() {
   };
 
   return (
-    <div className="fixed top-20 right-6 w-96 bg-dark-900 border border-dark-700 rounded-xl shadow-2xl z-[9999] overflow-hidden animate-slide-in">
+    <div className="fixed top-20 left-4 right-4 md:left-auto md:right-6 md:w-96 bg-dark-900 border border-dark-700 rounded-xl shadow-2xl z-[9999] overflow-hidden animate-slide-in">
       {/* Header */}
       <div className="bg-dark-800 px-4 py-3 flex items-center justify-between border-b border-dark-700">
         <div className="flex items-center gap-3">
@@ -237,7 +237,9 @@ export default function GlobalUploadWidget() {
                 className="text-red-500 flex-shrink-0 mt-0.5"
               />
               <div>
-                <p className="text-sm font-medium text-red-400">Upload failed</p>
+                <p className="text-sm font-medium text-red-400">
+                  Upload failed
+                </p>
                 <p className="text-xs text-dark-400">
                   {uploadState.errorMessage}
                 </p>

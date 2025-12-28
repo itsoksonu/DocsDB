@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import Head from "next/head";
 import { useRouter } from "next/router";
 import { useAuth } from "../contexts/AuthContext";
@@ -39,6 +39,13 @@ export default function UploadPage() {
   const errorMessage = uploadState.errorMessage;
   const isMinimized = uploadState.isMinimized;
 
+  // Reset state if we return to this page and it's still showing "processed"
+  useEffect(() => {
+    if (uploadState.status === "processed") {
+      resetUploadState();
+    }
+  }, []);
+
   const ALLOWED_TYPES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -74,7 +81,7 @@ export default function UploadPage() {
         label: "Creating thumbnail",
         description: "Generating document preview",
       },
-      "finalizing": {
+      finalizing: {
         icon: Check,
         label: "Finalizing",
         description: "Almost done!",
@@ -177,9 +184,9 @@ export default function UploadPage() {
       const status = response.data.status;
 
       if (status === "processed") {
-        updateUploadState({ 
-          status: "processed", 
-          processingStep: "finalizing" 
+        updateUploadState({
+          status: "processed",
+          processingStep: "finalizing",
         });
         toast.success("Document processed successfully!");
         setTimeout(() => {
@@ -228,7 +235,7 @@ export default function UploadPage() {
         status: "processing",
         processingStep: "virus-scan",
       });
-      
+
       await apiService.completeUpload({
         documentId: docId,
         key: key,
@@ -371,12 +378,16 @@ export default function UploadPage() {
                       {/* Current Step Display */}
                       <div className="p-4 bg-dark-800 rounded-xl">
                         {(() => {
-                          const stepInfo = getProcessingStepInfo(processingStep);
+                          const stepInfo =
+                            getProcessingStepInfo(processingStep);
                           const StepIcon = stepInfo.icon;
                           return (
                             <div className="flex items-center gap-4">
                               <div className="w-12 h-12 bg-blue-600/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                                <StepIcon size={24} className="text-blue-500 animate-pulse" />
+                                <StepIcon
+                                  size={24}
+                                  className="text-blue-500 animate-pulse"
+                                />
                               </div>
                               <div className="flex-1">
                                 <p className="font-medium">{stepInfo.label}</p>
