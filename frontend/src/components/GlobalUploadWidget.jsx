@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import {
   FileText,
@@ -10,6 +10,7 @@ import {
   FileSearch,
   Sparkles,
   Image as ImageIcon,
+  Minimize2,
 } from "../icons";
 import { useUpload } from "../contexts/UploadContext";
 import { apiService } from "../services/api";
@@ -18,6 +19,7 @@ import toast from "react-hot-toast";
 export default function GlobalUploadWidget() {
   const router = useRouter();
   const { uploadState, updateUploadState, resetUploadState } = useUpload();
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const getProcessingStepInfo = (step) => {
     const steps = {
@@ -116,7 +118,7 @@ export default function GlobalUploadWidget() {
     }
   }, [uploadState.status, uploadState.documentId]);
 
-  // Don't render if not minimized or no active upload
+  // Don't render if not minimized (shown on page) or no active upload
   if (!uploadState.isMinimized || !uploadState.file) {
     return null;
   }
@@ -139,6 +141,65 @@ export default function GlobalUploadWidget() {
     resetUploadState();
   };
 
+  // Render Circle View
+  if (isCollapsed) {
+    return (
+      <button
+        onClick={() => setIsCollapsed(false)}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-dark-800 border border-dark-700 rounded-full shadow-2xl z-[9999] flex items-center justify-center hover:scale-105 transition-all duration-200 animate-slide-in group"
+        title="Show Upload Progress"
+      >
+        {/* Status Indicator Ring */}
+        <div className="absolute inset-0 rounded-full border-2 border-transparent group-hover:border-blue-500/50 transition-colors" />
+
+        {/* Progress Ring (SVG) */}
+        {uploadState.status === "uploading" && (
+          <svg className="absolute inset-0 w-full h-full -rotate-90 p-0.5">
+            <circle
+              cx="28"
+              cy="28"
+              r="26"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="text-dark-700"
+            />
+            <circle
+              cx="28"
+              cy="28"
+              r="26"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="text-blue-500 transition-all duration-300"
+              strokeDasharray="163.36"
+              strokeDashoffset={163.36 - (163.36 * uploadState.progress) / 100}
+            />
+          </svg>
+        )}
+
+        {/* Icon based on status */}
+        <div className="relative z-10">
+          {uploadState.status === "uploading" && (
+            <span className="text-xs font-bold text-blue-500">
+              {uploadState.progress}%
+            </span>
+          )}
+          {uploadState.status === "processing" && (
+            <StepIcon size={24} className="text-blue-500 animate-pulse" />
+          )}
+          {uploadState.status === "processed" && (
+            <Check size={24} className="text-green-500" />
+          )}
+          {uploadState.status === "error" && (
+            <AlertCircle size={24} className="text-red-500" />
+          )}
+        </div>
+      </button>
+    );
+  }
+
+  // Render Card View
   return (
     <div className="fixed top-20 left-4 right-4 md:left-auto md:right-6 md:w-96 bg-dark-900 border border-dark-700 rounded-xl shadow-2xl z-[9999] overflow-hidden animate-slide-in">
       {/* Header */}
@@ -156,11 +217,20 @@ export default function GlobalUploadWidget() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setIsCollapsed(true)}
+            className="p-1.5 hover:bg-dark-700 rounded-lg transition-colors"
+            title="Minimize to circle"
+          >
+            <div className="w-4 h-4 flex items-center justify-center">
+              <div className="w-3 h-0.5 bg-dark-400 rounded-full" />
+            </div>
+          </button>
           <button
             onClick={handleExpand}
             className="p-1.5 hover:bg-dark-700 rounded-lg transition-colors"
-            title="Expand"
+            title="Expand to full page"
           >
             <Maximize2 size={16} className="text-dark-400" />
           </button>
