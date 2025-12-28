@@ -281,6 +281,16 @@ class APIService {
     const response = await this.client.get("/documents/user/stats");
     return response.data;
   }
+
+  async reportDocument(data) {
+    const response = await this.client.post("/report", data);
+    return response.data;
+  }
+
+  async checkReportStatus(documentId) {
+    const response = await this.client.get(`/report/check/${documentId}`);
+    return response.data;
+  }
 }
 
 export const apiService = new APIService();

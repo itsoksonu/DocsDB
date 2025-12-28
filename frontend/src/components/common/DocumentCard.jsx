@@ -287,7 +287,7 @@ export const DocumentCard = ({ document }) => {
                         onClick={(e) => {
                           e.stopPropagation();
                           setIsDropdownOpen(false);
-                          toast.info("Document hidden");
+                          toast.success("Document hidden");
                         }}
                       />
                       <DropdownItem
@@ -296,7 +296,7 @@ export const DocumentCard = ({ document }) => {
                         onClick={(e) => {
                           e.stopPropagation();
                           setIsDropdownOpen(false);
-                          toast.info("Report submitted");
+                          router.push(`/report/${document._id}`);
                         }}
                         className="text-red-400 hover:text-red-300"
                       />

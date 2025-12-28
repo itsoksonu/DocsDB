@@ -18,6 +18,7 @@ import monetizationRoutes from "./services/monetization/routes.js";
 import downloadRoutes from "./services/download/routes.js";
 import adminRoutes from "./services/admin/routes.js";
 import oauthRoutes from "./services/OAuth/routes.js";
+import reportRoutes from "./services/report/routes.js";
 
 import databaseManager from "./shared/database/connection.js";
 
@@ -42,9 +43,9 @@ app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    exposedHeaders: ['Set-Cookie'],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Set-Cookie"],
   })
 );
 
@@ -86,6 +87,7 @@ app.use(
   monetizationRoutes
 );
 app.use(`/api/${process.env.API_VERSION || "v1"}/download`, downloadRoutes);
+app.use(`/api/${process.env.API_VERSION || "v1"}/report`, reportRoutes);
 app.use(`/api/${process.env.API_VERSION || "v1"}/admin`, adminRoutes);
 
 app.use(errorHandler);

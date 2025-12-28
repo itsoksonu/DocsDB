@@ -5,7 +5,21 @@ import Link from "next/link";
 import { useAuth } from "../../contexts/AuthContext";
 import { apiService } from "../../services/api";
 import { DesktopNavbar } from "../../components/layout/DesktopNavbar";
-import { Download, Eye, Bookmark, BookmarkCheck, Share2, Calendar, FileText, ChevronLeft, ChevronDown, ChevronUp, AlertCircle, Maximize2 } from "../../icons";
+import {
+  Download,
+  Eye,
+  Bookmark,
+  BookmarkCheck,
+  Share2,
+  Calendar,
+  FileText,
+  ChevronLeft,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  Maximize2,
+  Flag,
+} from "../../icons";
 import toast from "react-hot-toast";
 import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
@@ -38,7 +52,7 @@ const DocumentViewerPage = () => {
     if (document && user) {
       checkSavedStatus();
     }
-    if (document?.fileType === 'csv' && viewUrl) {
+    if (document?.fileType === "csv" && viewUrl) {
       fetchCsvContent();
     }
   }, [document, user, viewUrl]);
@@ -70,9 +84,10 @@ const DocumentViewerPage = () => {
       const text = await response.text();
 
       // Simple CSV parser (split by newlines, then commas)
-      const rows = text.split('\n')
-        .map(row => row.split(','))
-        .filter(row => row.some(cell => cell.trim() !== ''));
+      const rows = text
+        .split("\n")
+        .map((row) => row.split(","))
+        .filter((row) => row.some((cell) => cell.trim() !== ""));
 
       setCsvData(rows);
     } catch (error) {
@@ -177,7 +192,7 @@ const DocumentViewerPage = () => {
     const type = document.fileType?.toLowerCase();
     const encodedUrl = encodeURIComponent(viewUrl);
 
-    if (['xlsx', 'xls', 'doc', 'docx', 'ppt', 'pptx'].includes(type)) {
+    if (["xlsx", "xls", "doc", "docx", "ppt", "pptx"].includes(type)) {
       return `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
     }
 
@@ -213,7 +228,10 @@ const DocumentViewerPage = () => {
           <thead>
             <tr className="bg-gray-100 border-b border-gray-300">
               {csvData[0]?.map((header, i) => (
-                <th key={i} className="p-2 text-left font-semibold border-r border-gray-200 min-w-[100px]">
+                <th
+                  key={i}
+                  className="p-2 text-left font-semibold border-r border-gray-200 min-w-[100px]"
+                >
                   {header}
                 </th>
               ))}
@@ -221,9 +239,16 @@ const DocumentViewerPage = () => {
           </thead>
           <tbody>
             {csvData.slice(1).map((row, rowIndex) => (
-              <tr key={rowIndex} className="border-b border-gray-100 hover:bg-blue-50">
+              <tr
+                key={rowIndex}
+                className="border-b border-gray-100 hover:bg-blue-50"
+              >
                 {row.map((cell, cellIndex) => (
-                  <td key={cellIndex} className="p-2 border-r border-gray-100 truncate max-w-[200px]" title={cell}>
+                  <td
+                    key={cellIndex}
+                    className="p-2 border-r border-gray-100 truncate max-w-[200px]"
+                    title={cell}
+                  >
                     {cell}
                   </td>
                 ))}
@@ -239,7 +264,7 @@ const DocumentViewerPage = () => {
     const type = document.fileType?.toLowerCase();
 
     // 1. Handle CSV natively
-    if (type === 'csv') {
+    if (type === "csv") {
       return renderCsvPreview();
     }
 
@@ -297,7 +322,8 @@ const DocumentViewerPage = () => {
             <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
             <h1 className="text-2xl font-bold mb-2">Document Not Found</h1>
             <p className="text-dark-300 mb-6">
-              {error || "The document you're looking for doesn't exist or has been removed."}
+              {error ||
+                "The document you're looking for doesn't exist or has been removed."}
             </p>
             <Link
               href="/"
@@ -353,7 +379,9 @@ const DocumentViewerPage = () => {
                   {document.generatedDescription && (
                     <p
                       className={`text-dark-300 text-sm leading-relaxed mb-4 ${
-                        !showMobileDetails ? 'line-clamp-2 lg:line-clamp-none' : ''
+                        !showMobileDetails
+                          ? "line-clamp-2 lg:line-clamp-none"
+                          : ""
                       }`}
                     >
                       {document.generatedDescription}
@@ -378,7 +406,11 @@ const DocumentViewerPage = () => {
                             : "bg-dark-800 hover:bg-dark-700 text-white"
                         }`}
                       >
-                        {isSaved ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}
+                        {isSaved ? (
+                          <BookmarkCheck size={16} />
+                        ) : (
+                          <Bookmark size={16} />
+                        )}
                         {isSaved ? "Saved" : "Save"}
                       </button>
                       <button
@@ -389,6 +421,13 @@ const DocumentViewerPage = () => {
                         Share
                       </button>
                     </div>
+                    <button
+                      onClick={() => router.push(`/report/${id}`)}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-transparent hover:bg-dark-800 text-dark-400 hover:text-red-400 border border-dark-800/50 hover:border-dark-700/50 rounded-lg transition-colors text-sm w-full"
+                    >
+                      <Flag size={16} />
+                      Report Issue
+                    </button>
                   </div>
 
                   <button
@@ -396,16 +435,22 @@ const DocumentViewerPage = () => {
                     className="lg:hidden w-full mt-4 pt-2 border-t border-dark-800/50 text-dark-400 hover:text-white text-xs font-medium flex items-center justify-center gap-1 transition-colors"
                   >
                     {showMobileDetails ? (
-                      <>Show Less <ChevronUp size={14} /></>
+                      <>
+                        Show Less <ChevronUp size={14} />
+                      </>
                     ) : (
-                      <>Show Details <ChevronDown size={14} /></>
+                      <>
+                        Show Details <ChevronDown size={14} />
+                      </>
                     )}
                   </button>
                 </div>
 
-                <div className={`bg-dark-900/50 backdrop-blur-sm rounded-xl p-4 border border-dark-800/50 ${
-                    !showMobileDetails ? 'hidden lg:block' : 'block'
-                  }`}>
+                <div
+                  className={`bg-dark-900/50 backdrop-blur-sm rounded-xl p-4 border border-dark-800/50 ${
+                    !showMobileDetails ? "hidden lg:block" : "block"
+                  }`}
+                >
                   <h2 className="text-sm font-semibold mb-4 text-dark-200 uppercase tracking-wider">
                     Details
                   </h2>
@@ -434,7 +479,9 @@ const DocumentViewerPage = () => {
 
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <p className="text-xs text-dark-400 mb-1">Upload date</p>
+                        <p className="text-xs text-dark-400 mb-1">
+                          Upload date
+                        </p>
                         <div className="flex items-center gap-2 text-sm text-white">
                           <Calendar size={14} className="text-dark-400" />
                           {formatDate(document.createdAt)}
