@@ -28,7 +28,8 @@ try {
 const { PDFDocument } = require("pdf-lib");
 const Tesseract = require("tesseract.js");
 import { pdfToImg } from "pdftoimg-js";
-import { Jimp } from "jimp";
+import { Jimp, loadFont } from "jimp";
+import { SANS_64_WHITE } from "jimp/fonts";
 
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -520,20 +521,18 @@ async function generateTypeBadgeThumbnail(label, fileTypeForName, bgColorHex) {
   const image = new Jimp({ width, height, color: bgColorHex });
 
   // Load built-in Jimp font
-  const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+  const font = await loadFont(SANS_64_WHITE);
 
-  image.print(
+  image.print({
     font,
-    0,
-    0,
-    {
-      text: label,
-      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-      alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE,
-    },
-    width,
-    height
-  );
+    x: 0,
+    y: 0,
+    text: label,
+    maxWidth: width,
+    maxHeight: height,
+    alignmentX: 2, // Horizontal Align Center
+    alignmentY: 16, // Vertical Align Middle
+  });
 
   const outPath = path.join(tmpdir(), outFileName);
   await image.write(outPath);
@@ -625,7 +624,7 @@ async function extractFromPDF(filePath) {
     if (!pdfParse || typeof pdfParse !== 'function') {
       logger.warn("pdf-parse not available, falling back to OCR");
       const ocrText = await extractPDFWithOCR(filePath, 5);
-      
+
       if (!ocrText || !ocrText.trim()) {
         throw new Error("No OCR text extracted from PDF images");
       }
