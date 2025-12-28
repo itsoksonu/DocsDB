@@ -30,22 +30,42 @@ const Footer = () => {
             <h4 className="font-semibold mb-4 text-white">Quick Links</h4>
             <ul className="space-y-2 text-dark-300">
               <li>
-                <Link href="/explore" className="hover:text-white transition-colors">
+                <Link
+                  href="/explore"
+                  className="hover:text-white transition-colors"
+                >
                   Explore Documents
                 </Link>
               </li>
               <li>
-                <Link href="/upload" className="hover:text-white transition-colors">
+                <Link
+                  href="/upload"
+                  className="hover:text-white transition-colors"
+                >
                   Upload Document
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="hover:text-white transition-colors">
+                <Link
+                  href="/about"
+                  className="hover:text-white transition-colors"
+                >
                   About Us
                 </Link>
               </li>
               <li>
-                <Link href="/contact" className="hover:text-white transition-colors">
+                <Link
+                  href="/help-center"
+                  className="hover:text-white transition-colors"
+                >
+                  Help Center
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/contact"
+                  className="hover:text-white transition-colors"
+                >
                   Contact
                 </Link>
               </li>
@@ -57,22 +77,34 @@ const Footer = () => {
             <h4 className="font-semibold mb-4 text-white">Legal</h4>
             <ul className="space-y-2 text-dark-300">
               <li>
-                <Link href="/privacy" className="hover:text-white transition-colors">
+                <Link
+                  href="/privacy"
+                  className="hover:text-white transition-colors"
+                >
                   Privacy Policy
                 </Link>
               </li>
               <li>
-                <Link href="/terms" className="hover:text-white transition-colors">
+                <Link
+                  href="/terms"
+                  className="hover:text-white transition-colors"
+                >
                   Terms of Service
                 </Link>
               </li>
               <li>
-                <Link href="/copyright" className="hover:text-white transition-colors">
+                <Link
+                  href="/copyright"
+                  className="hover:text-white transition-colors"
+                >
                   Copyright
                 </Link>
               </li>
               <li>
-                <Link href="/dmca" className="hover:text-white transition-colors">
+                <Link
+                  href="/dmca"
+                  className="hover:text-white transition-colors"
+                >
                   DMCA
                 </Link>
               </li>

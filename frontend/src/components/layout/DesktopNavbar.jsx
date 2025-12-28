@@ -138,7 +138,7 @@ export const DesktopNavbar = ({
   };
 
   const navigateToHelpCenter = () => {
-    router.push("/help");
+    router.push("/help-center");
     setIsProfileDropdownOpen(false);
   };
 
