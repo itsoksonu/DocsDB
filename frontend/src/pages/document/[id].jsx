@@ -9,7 +9,7 @@ import { Download, Eye, Bookmark, BookmarkCheck, Share2, Calendar, FileText, Che
 import toast from "react-hot-toast";
 import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
-import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton"; 
+import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
 
 const DocumentViewerPage = () => {
   const router = useRouter();
@@ -68,7 +68,7 @@ const DocumentViewerPage = () => {
       setCsvLoading(true);
       const response = await fetch(viewUrl);
       const text = await response.text();
-      
+
       // Simple CSV parser (split by newlines, then commas)
       const rows = text.split('\n')
         .map(row => row.split(','))
@@ -181,8 +181,8 @@ const DocumentViewerPage = () => {
       return `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
     }
 
-    if (type === 'pdf') {
-      return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
+    if (type === "pdf") {
+      return viewUrl;
     }
 
     return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
@@ -349,9 +349,9 @@ const DocumentViewerPage = () => {
                   <h1 className="text-xl font-bold mb-3 break-words">
                     {document.generatedTitle}
                   </h1>
-                  
+
                   {document.generatedDescription && (
-                    <p 
+                    <p
                       className={`text-dark-300 text-sm leading-relaxed mb-4 ${
                         !showMobileDetails ? 'line-clamp-2 lg:line-clamp-none' : ''
                       }`}
@@ -492,7 +492,7 @@ const DocumentViewerPage = () => {
                 <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl border border-dark-800/50 overflow-hidden sticky top-24 relative group">
                   {/* Top Action Bar for Viewer */}
                   <div className="absolute top-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button 
+                    <button
                       onClick={handleFullScreen}
                       className="bg-dark-900/80 p-2 rounded-lg text-white hover:bg-blue-600 transition-colors backdrop-blur-sm border border-dark-700 shadow-lg"
                       title="Open in new tab"
