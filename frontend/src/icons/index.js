@@ -43,6 +43,7 @@ export {
   Shield,
   FileSearch,
   Trash2,
+  MessageSquare,
 } from "lucide-react";
 
 export { FaGoogle, FaFacebook, FaGithub } from "react-icons/fa";

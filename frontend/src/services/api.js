@@ -287,6 +287,11 @@ class APIService {
     return response.data;
   }
 
+  async submitReport(data) {
+    const response = await this.client.post("/report", data);
+    return response.data;
+  }
+
   async checkReportStatus(documentId) {
     const response = await this.client.get(`/report/check/${documentId}`);
     return response.data;

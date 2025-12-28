@@ -16,7 +16,10 @@ router.post(
   "/",
   authMiddleware,
   [
-    body("documentId").isMongoId().withMessage("Invalid document ID"),
+    body("documentId")
+      .optional()
+      .isMongoId()
+      .withMessage("Invalid document ID"),
     body("reason")
       .trim()
       .notEmpty()
@@ -30,6 +33,7 @@ router.post(
         "inappropriate",
         "harassment",
         "fraud",
+        "bug",
         "other",
       ])
       .withMessage("Invalid report type"),
@@ -51,36 +55,44 @@ router.post(
       const { documentId, reason, type, category } = req.body;
       const reporterId = req.user.userId;
 
-      // Verify document exists
-      const document = await Document.findById(documentId);
-      if (!document) {
-        return res.status(404).json({
-          success: false,
-          message: "Document not found",
-        });
-      }
+      // Validate: If not system category, documentId is likely required?
+      // Or if documentId is provided, verify it.
 
-      // Check if user already reported this document recently (optional flood control)
-      const existingReport = await Report.findOne({
-        reporterId,
-        documentId,
-        status: { $in: ["pending", "under_review", "escalated"] },
-      });
+      let targetUserId = null;
 
-      if (existingReport) {
-        return res.status(409).json({
-          success: false,
-          message:
-            "You have already reported this document. Your report is currently being reviewed.",
+      if (documentId) {
+        // Verify document exists
+        const document = await Document.findById(documentId);
+        if (!document) {
+          return res.status(404).json({
+            success: false,
+            message: "Document not found",
+          });
+        }
+        targetUserId = document.userId;
+
+        // Check if user already reported this document recently
+        const existingReport = await Report.findOne({
+          reporterId,
+          documentId,
+          status: { $in: ["pending", "under_review", "escalated"] },
         });
+
+        if (existingReport) {
+          return res.status(409).json({
+            success: false,
+            message:
+              "You have already reported this document. Your report is currently being reviewed.",
+          });
+        }
       }
 
       const report = new Report({
         reporterId,
-        documentId,
-        targetUserId: document.userId, // The owner of the document
-        type,
-        category: category || "content",
+        documentId: documentId || undefined,
+        targetUserId: targetUserId || undefined,
+        type, // 'other' for bugs
+        category: category || (documentId ? "content" : "system"),
         reason,
         status: "pending",
         reporterIp: req.ip,
@@ -90,7 +102,9 @@ router.post(
       await report.save();
 
       logger.info(
-        `New report created: ${report._id} by user ${reporterId} for document ${documentId}`
+        `New report created: ${report._id} by user ${reporterId} ${
+          documentId ? `for document ${documentId}` : "type: system"
+        }`
       );
 
       res.status(201).json({
