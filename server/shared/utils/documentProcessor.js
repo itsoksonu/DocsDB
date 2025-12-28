@@ -57,7 +57,11 @@ async function ensureDependencies() {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export async function processDocument(documentId, s3Key) {
+export async function processDocument(
+  documentId,
+  s3Key,
+  onProgress = () => {}
+) {
   const document = await Document.findById(documentId);
   if (!document) throw new Error(`Document ${documentId} not found`);
 
@@ -67,6 +71,7 @@ export async function processDocument(documentId, s3Key) {
     await ensureDependencies();
 
     // Perform actual virus scan
+    onProgress({ step: "virus-scan", message: "Scanning for viruses..." });
     const virusScanResult = await performVirusScan(s3Key);
     if (!virusScanResult.clean) {
       throw new Error(
@@ -76,6 +81,10 @@ export async function processDocument(documentId, s3Key) {
       );
     }
 
+    onProgress({
+      step: "extracting-content",
+      message: "Extracting text and data...",
+    });
     filePath = await downloadFromS3(s3Key);
     const content = await extractContent(filePath, document.fileType);
 
@@ -83,12 +92,17 @@ export async function processDocument(documentId, s3Key) {
       throw new Error("No content extracted from document");
     }
 
+    onProgress({ step: "extracting-content", message: "Counting pages..." });
     const pageCount = await getAccuratePageCount(
       filePath,
       document.fileType,
       content
     );
 
+    onProgress({
+      step: "generating-metadata",
+      message: "Generating AI metadata...",
+    });
     const metadata = await generateEnhancedMetadata(
       content,
       document.originalFilename,
@@ -98,6 +112,10 @@ export async function processDocument(documentId, s3Key) {
     metadata.pageCount = pageCount;
     document.pageCount = pageCount;
 
+    onProgress({
+      step: "creating-thumbnail",
+      message: "Generating thumbnail...",
+    });
     thumbnailPath = await generateThumbnail(filePath, document.fileType);
 
     if (thumbnailPath) {
@@ -106,6 +124,10 @@ export async function processDocument(documentId, s3Key) {
       document.thumbnailS3Path = thumbnailKey;
     }
 
+    onProgress({
+      step: "generating-metadata",
+      message: "Creating embeddings...",
+    });
     const embedding = await generateLocalEmbeddings(content, metadata);
 
     document.generatedTitle = metadata.title;
@@ -120,6 +142,8 @@ export async function processDocument(documentId, s3Key) {
     document.metadata = metadata;
     document.status = "processed";
     document.virusScanResult = virusScanResult;
+
+    onProgress({ step: "finalizing", message: "Saving document..." });
     await document.save();
   } catch (error) {
     logger.error(`Processing failed for document ${documentId}:`, error);
@@ -139,7 +163,9 @@ async function performVirusScan(s3Key) {
 
     const vtApiKey = process.env.VIRUSTOTAL_API_KEY;
     if (!vtApiKey) {
-      logger.warn("⚠️ VirusTotal API key not configured, using basic validation");
+      logger.warn(
+        "⚠️ VirusTotal API key not configured, using basic validation"
+      );
       return await performBasicFileValidation(s3Key);
     }
 
@@ -158,7 +184,9 @@ async function scanWithVirusTotal(s3Key, apiKey) {
 
     // VirusTotal has a 32MB limit for direct uploads
     if (fileSize > 32 * 1024 * 1024) {
-      logger.warn(`File too large for VirusTotal (${fileSize} bytes), using basic validation`);
+      logger.warn(
+        `File too large for VirusTotal (${fileSize} bytes), using basic validation`
+      );
       return await performBasicFileValidation(s3Key);
     }
 
@@ -207,8 +235,12 @@ async function scanWithVirusTotal(s3Key, apiKey) {
 
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      logger.error(`VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`);
-      throw new Error(`VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`);
+      logger.error(
+        `VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`
+      );
+      throw new Error(
+        `VirusTotal upload failed: ${uploadResponse.status} - ${errorText}`
+      );
     }
 
     const uploadData = await uploadResponse.json();
@@ -224,7 +256,11 @@ async function scanWithVirusTotal(s3Key, apiKey) {
     while (attempts < maxAttempts) {
       await new Promise((resolve) => setTimeout(resolve, waitTime));
 
-      logger.info(`🔍 Checking analysis status (attempt ${attempts + 1}/${maxAttempts})...`);
+      logger.info(
+        `🔍 Checking analysis status (attempt ${
+          attempts + 1
+        }/${maxAttempts})...`
+      );
 
       const analysisResponse = await fetch(
         `https://www.virustotal.com/api/v3/analyses/${analysisId}`,
@@ -259,7 +295,10 @@ async function scanWithVirusTotal(s3Key, apiKey) {
             scanner: "virustotal",
             scannedAt: new Date(),
             details: `Detected by ${malicious} engines as malicious (${suspicious} flagged as suspicious)`,
-            threat: malicious > 0 ? "Malware detected" : "Suspicious content detected",
+            threat:
+              malicious > 0
+                ? "Malware detected"
+                : "Suspicious content detected",
             vtResults: stats,
             analysisId: analysisId,
           };
@@ -308,8 +347,24 @@ async function performBasicFileValidation(s3Key) {
 
   // 1. Block dangerous extensions
   const dangerousExtensions = [
-    "exe", "bat", "cmd", "scr", "pif", "com", "vbs", "js", "jar", 
-    "wsf", "msi", "app", "deb", "rpm", "dmg", "pkg", "run", "bin"
+    "exe",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "com",
+    "vbs",
+    "js",
+    "jar",
+    "wsf",
+    "msi",
+    "app",
+    "deb",
+    "rpm",
+    "dmg",
+    "pkg",
+    "run",
+    "bin",
   ];
 
   if (dangerousExtensions.includes(fileExtension)) {
@@ -404,7 +459,9 @@ function validateFileSignature(buffer, extension) {
 
 async function generateThumbnail(filePath, fileType) {
   try {
-    logger.info(`🎨 Generating first page thumbnail for ${fileType}: ${filePath}`);
+    logger.info(
+      `🎨 Generating first page thumbnail for ${fileType}: ${filePath}`
+    );
 
     const fs = await import("fs");
 
@@ -468,9 +525,7 @@ async function generatePDFFirstPageThumbnail(filePath) {
 
     const outPath = path.join(
       tmpdir(),
-      `pdf-thumb-${Date.now()}-${Math.random()
-        .toString(16)
-        .slice(2)}.jpg`
+      `pdf-thumb-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
     );
 
     await fs.promises.writeFile(outPath, buffer);
@@ -621,7 +676,7 @@ async function extractFromPDF(filePath) {
   const fs = await import("fs");
 
   try {
-    if (!pdfParse || typeof pdfParse !== 'function') {
+    if (!pdfParse || typeof pdfParse !== "function") {
       logger.warn("pdf-parse not available, falling back to OCR");
       const ocrText = await extractPDFWithOCR(filePath, 5);
 
@@ -838,12 +893,7 @@ async function generateEnhancedMetadata(content, filename, fileType) {
     const groqResult = await generateWithGroq(content, filename);
     if (groqResult?.title) {
       logger.info("Used Groq for metadata");
-      return enrichMetadataWithLocalData(
-        groqResult,
-        content,
-        fileType,
-        "groq"
-      );
+      return enrichMetadataWithLocalData(groqResult, content, fileType, "groq");
     }
   } catch (error) {
     logger.warn(`Groq failed: ${error.message}`);
@@ -1026,7 +1076,12 @@ function parseAIResponse(text) {
   }
 }
 
-function enrichMetadataWithLocalData(aiMetadata, content, fileType, generatedBy) {
+function enrichMetadataWithLocalData(
+  aiMetadata,
+  content,
+  fileType,
+  generatedBy
+) {
   return {
     ...aiMetadata,
     pageCount: estimatePageCount(content),
@@ -1478,7 +1533,10 @@ async function getAccuratePageCount(filePath, fileType, content) {
         return estimatePageCount(content);
     }
   } catch (error) {
-    logger.error(`Error calculating page count for ${fileType}:`, error.message);
+    logger.error(
+      `Error calculating page count for ${fileType}:`,
+      error.message
+    );
     return estimatePageCount(content);
   }
 }
@@ -1514,7 +1572,9 @@ async function getDOCXPageCount(filePath, content) {
       Math.round((pagesByWords + pagesByChars) / 2)
     );
 
-    logger.info(`✓ DOCX estimated page count: ${pageCount} (${wordCount} words)`);
+    logger.info(
+      `✓ DOCX estimated page count: ${pageCount} (${wordCount} words)`
+    );
     return pageCount;
   } catch (error) {
     logger.error("Failed to estimate DOCX page count:", error.message);
@@ -1602,7 +1662,7 @@ ${content.substring(0, 8000)}`.trim();
   } catch (error) {
     logger.error("Failed to generate embedding:", {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
     });
     // Return null to allow processing to finish without embedding
     return null;

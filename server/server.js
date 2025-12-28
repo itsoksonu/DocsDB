@@ -103,7 +103,7 @@ async function startServer() {
     await databaseManager.connectMongo();
     await databaseManager.connectRedis();
 
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`🚀 DocsDB Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV}`);
       console.log(`🔗 Health check: http://localhost:${PORT}/health`);
@@ -112,6 +112,14 @@ async function startServer() {
           process.env.API_VERSION || "v1"
         }`
       );
+    });
+
+    // Initialize Socket.io
+    const { initSocket } = await import("./shared/utils/socket.js");
+    initSocket(server, {
+      origin: process.env.FRONTEND_URL || "http://localhost:3000",
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     });
   } catch (error) {
     console.error("Failed to start server:", error);

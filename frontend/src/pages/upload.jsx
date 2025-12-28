@@ -163,49 +163,6 @@ export default function UploadPage() {
     });
   };
 
-  const simulateProcessingSteps = async () => {
-    const steps = [
-      "virus-scan",
-      "extracting-content",
-      "generating-metadata",
-      "creating-thumbnail",
-      "finalizing",
-    ];
-
-    for (const step of steps) {
-      updateUploadState({ processingStep: step });
-      await new Promise((resolve) => setTimeout(resolve, 10000));
-    }
-  };
-
-  const checkProcessingStatus = async (docId) => {
-    try {
-      const response = await apiService.getUploadStatus(docId);
-      const status = response.data.status;
-
-      if (status === "processed") {
-        updateUploadState({
-          status: "processed",
-          processingStep: "finalizing",
-        });
-        toast.success("Document processed successfully!");
-        setTimeout(() => {
-          router.push("/profile?tab=uploaded");
-        }, 2000);
-      } else if (status === "failed") {
-        updateUploadState({
-          status: "error",
-          errorMessage: response.data.processingError || "Processing failed",
-        });
-        toast.error("Document processing failed");
-      } else if (status === "processing") {
-        setTimeout(() => checkProcessingStatus(docId), 3000);
-      }
-    } catch (error) {
-      console.error("Error checking status:", error);
-    }
-  };
-
   const handleUpload = async () => {
     if (!selectedFile || !user) return;
 
@@ -240,10 +197,6 @@ export default function UploadPage() {
         documentId: docId,
         key: key,
       });
-
-      // Simulate processing steps for better UX
-      simulateProcessingSteps();
-      setTimeout(() => checkProcessingStatus(docId), 2000);
     } catch (error) {
       console.error("Upload error:", error);
       updateUploadState({

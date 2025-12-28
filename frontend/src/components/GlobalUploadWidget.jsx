@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { io } from "socket.io-client";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import {
   FileText,
@@ -20,8 +21,10 @@ export default function GlobalUploadWidget() {
   const router = useRouter();
   const { uploadState, updateUploadState, resetUploadState } = useUpload();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const socketRef = useRef(null);
 
   const getProcessingStepInfo = (step) => {
+    // ... existing code ...
     const steps = {
       "virus-scan": {
         icon: Shield,
@@ -60,63 +63,110 @@ export default function GlobalUploadWidget() {
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
 
-  const simulateProcessingSteps = async () => {
-    const steps = [
-      "virus-scan",
-      "extracting-content",
-      "generating-metadata",
-      "creating-thumbnail",
-      "finalizing",
-    ];
+  // Socket.io integration + Polling Fallback
+  useEffect(() => {
+    let pollInterval;
 
-    for (const step of steps) {
-      updateUploadState({ processingStep: step });
-      await new Promise((resolve) => setTimeout(resolve, 10000));
-    }
-  };
-
-  const checkProcessingStatus = async (docId) => {
-    try {
-      const response = await apiService.getUploadStatus(docId);
-      const status = response.data.status;
-
-      if (status === "processed") {
-        updateUploadState({
-          status: "processed",
-          processingStep: "finalizing",
-        });
-        toast.success("Document processed successfully!");
-
-        // Auto-close after 3 seconds
-        setTimeout(() => {
-          resetUploadState();
-          router.push("/profile?tab=uploaded");
-        }, 2000);
-      } else if (status === "failed") {
-        updateUploadState({
-          status: "error",
-          errorMessage: response.data.processingError || "Processing failed",
-        });
-        toast.error("Document processing failed");
-      } else if (status === "processing") {
-        setTimeout(() => checkProcessingStatus(docId), 3000);
+    if (uploadState.status === "processing" && uploadState.documentId) {
+      if (!uploadState.isMinimized) {
+        toast.dismiss();
+        toast.loading("Processing document...", { duration: 2000 });
       }
-    } catch (error) {
-      console.error("Error checking status:", error);
+
+      // 1. Setup Socket Connection
+      const socket = io(
+        process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001",
+        {
+          withCredentials: true,
+          transports: ["websocket", "polling"], // Allow both
+        }
+      );
+      socketRef.current = socket;
+
+      socket.on("connect", () => {
+        console.log("Connected to progress socket");
+        socket.emit("join-document", uploadState.documentId);
+      });
+
+      socket.on("processing-progress", (data) => {
+        console.log("Progress event:", data);
+        handleProgressUpdate(data);
+      });
+
+      socket.on("error", (err) => {
+        console.error("Socket error:", err);
+      });
+
+      // 2. Setup Polling Fallback (every 2 seconds)
+      // This catches cases where we miss events (e.g. job finishes before socket connects)
+      const checkStatus = async () => {
+        try {
+          const response = await apiService.getUploadStatus(
+            uploadState.documentId
+          );
+          const { status, processingError, generatedTitle } =
+            response.data.data || response.data;
+
+          if (status === "processed") {
+            handleProgressUpdate({ completed: true });
+          } else if (status === "failed") {
+            updateUploadState({
+              status: "error",
+              errorMessage: processingError || "Processing failed",
+            });
+          }
+        } catch (error) {
+          console.error("Status check failed:", error);
+        }
+      };
+
+      // Check immediately and then interval
+      checkStatus();
+      pollInterval = setInterval(checkStatus, 2000);
+    }
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [uploadState.status, uploadState.documentId]);
+
+  const handleProgressUpdate = (data) => {
+    if (data.completed || data.step === "completed") {
       updateUploadState({
-        status: "error",
-        errorMessage: "Failed to check processing status",
+        status: "processed",
+        processingStep: "finalizing",
+        progress: 100,
+      });
+      toast.success("Document processed successfully!");
+
+      setTimeout(() => {
+        resetUploadState();
+        router.push("/profile?tab=uploaded");
+      }, 2000);
+    } else if (data.step) {
+      updateUploadState({
+        processingStep: data.step,
+        progress: getProgressForStep(data.step),
       });
     }
   };
 
-  // Start polling when processing begins
-  useEffect(() => {
-    if (uploadState.status === "processing" && uploadState.documentId) {
-      simulateProcessingSteps();
-      checkProcessingStatus(uploadState.documentId);
-    }
-  }, [uploadState.status, uploadState.documentId]);
+  const getProgressForStep = (step) => {
+    const steps = {
+      "virus-scan": 10,
+      "extracting-content": 30,
+      "generating-metadata": 60,
+      "creating-thumbnail": 80,
+      finalizing: 95,
+      completed: 100,
+    };
+    return steps[step] || 50;
+  };
 
   // Don't render if not minimized (shown on page) or no active upload
   if (!uploadState.isMinimized || !uploadState.file) {

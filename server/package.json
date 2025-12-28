@@ -38,6 +38,7 @@
     "pdf-parse": "^1.1.1",
     "pdftoimg-js": "^0.2.5",
     "redis": "^4.6.10",
+    "socket.io": "^4.8.3",
     "stripe": "^19.2.1",
     "tesseract.js": "^6.0.1",
     "uuid": "^9.0.1",
