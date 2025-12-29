@@ -60,7 +60,7 @@ export async function generateFeed({
 
     const documents = await Document.find(fetchQuery)
       .select("-metadata -embeddingsId")
-      .populate("userId", "name")
+      .populate("userId", "name avatar")
       .sort(sortOptions)
       .limit(limit + 10);
 
@@ -189,7 +189,7 @@ export async function generatePersonalizedFeed(userId, limit = 20) {
       _id: { $nin: hiddenDocs },
     })
       .select("-metadata -embeddingsId")
-      .populate("userId", "name")
+      .populate("userId", "name avatar")
       .sort({ viewsCount: -1, createdAt: -1 })
       .limit(remaining);
 

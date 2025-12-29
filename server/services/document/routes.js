@@ -49,7 +49,10 @@ router.get(
       const { id } = req.params;
       const userId = req.user?.userId;
 
-      const document = await Document.findById(id).populate("userId", "name");
+      const document = await Document.findById(id).populate(
+        "userId",
+        "name avatar"
+      );
 
       if (!document) {
         return res.status(404).json({

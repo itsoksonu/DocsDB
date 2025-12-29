@@ -19,6 +19,7 @@ import { apiService } from "../../services/api";
 import toast from "react-hot-toast";
 import { useAuth } from "../../contexts/AuthContext";
 import { Modal } from "../ui/Modal";
+import { ShareModal } from "./ShareModal";
 
 export const DocumentCard = ({ document }) => {
   const { user } = useAuth();
@@ -31,6 +32,7 @@ export const DocumentCard = ({ document }) => {
   const [hasCheckedStatus, setHasCheckedStatus] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   useEffect(() => {
     if (isDropdownOpen && !hasCheckedStatus) {
@@ -106,29 +108,10 @@ export const DocumentCard = ({ document }) => {
     }
   };
 
-  const handleShare = async (e) => {
+  const handleShare = (e) => {
     e.stopPropagation();
     setIsDropdownOpen(false);
-
-    const shareUrl = `${window.location.origin}/document/${document._id}`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: document.generatedTitle,
-          text: document.generatedDescription,
-          url: shareUrl,
-        });
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          navigator.clipboard.writeText(shareUrl);
-          toast.success("Link copied to clipboard");
-        }
-      }
-    } else {
-      navigator.clipboard.writeText(shareUrl);
-      toast.success("Link copied to clipboard");
-    }
+    setIsShareModalOpen(true);
   };
 
   const handleDelete = async () => {
@@ -345,6 +328,11 @@ export const DocumentCard = ({ document }) => {
           </div>
         </div>
       </div>
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        document={document}
+      />
     </>
   );
 };

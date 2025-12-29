@@ -44,6 +44,7 @@ export {
   FileSearch,
   Trash2,
   MessageSquare,
+  Copy,
 } from "lucide-react";
 
 export { FaGoogle, FaFacebook, FaGithub } from "react-icons/fa";

@@ -95,6 +95,15 @@ async function addSignedThumbnails(documents) {
         doc.thumbnailUrl = await s3.generateViewUrl(doc.thumbnailS3Path);
       }
 
+      // Also sign the user avatar if it exists and looks like an S3 key (not http)
+      if (
+        doc.userId &&
+        doc.userId.avatar &&
+        !doc.userId.avatar.startsWith("http")
+      ) {
+        doc.userId.avatar = await s3.generateViewUrl(doc.userId.avatar);
+      }
+
       return doc;
     })
   );
@@ -578,7 +587,10 @@ async function performSearch({ query, type, category, page, limit, userId }) {
       const documents = await Document.aggregate(pipeline);
 
       // Manually populate userId since aggregate doesn't do it automatically like find()
-      await Document.populate(documents, { path: "userId", select: "name" });
+      await Document.populate(documents, {
+        path: "userId",
+        select: "name avatar",
+      });
 
       return {
         documents: documents.map((doc) => ({ ...doc, id: doc._id })), // Normalize ID
@@ -610,7 +622,7 @@ async function performSearch({ query, type, category, page, limit, userId }) {
     const [documents, total] = await Promise.all([
       Document.find(searchQuery)
         .select("-metadata -embeddingsId -embedding")
-        .populate("userId", "name")
+        .populate("userId", "name avatar")
         .sort({ score: { $meta: "textScore" } })
         .skip(skip)
         .limit(limit),
@@ -647,7 +659,7 @@ async function getRelatedDocuments(documentId, limit) {
     ],
   })
     .select("-metadata -embeddingsId")
-    .populate("userId", "name")
+    .populate("userId", "name avatar")
     .sort({ viewsCount: -1, createdAt: -1 })
     .limit(limit);
 
@@ -689,6 +701,7 @@ async function getTrendingDocuments(timeframe, limit) {
         category: 1,
         createdAt: 1,
         "user.name": 1,
+        "user.avatar": 1,
         "user._id": 1,
         trendingScore: {
           $add: [
