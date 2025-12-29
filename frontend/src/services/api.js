@@ -239,6 +239,14 @@ class APIService {
     return response.data;
   }
 
+  async recordInteraction(documentId, type) {
+    const response = await this.client.post("/feed/interactions", {
+      documentId,
+      type,
+    });
+    return response.data;
+  }
+
   // document Save related endpoints
   async saveDocument(documentId) {
     const response = await this.client.post(`/documents/${documentId}/save`);

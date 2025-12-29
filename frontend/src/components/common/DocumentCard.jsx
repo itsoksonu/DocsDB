@@ -27,6 +27,7 @@ export const DocumentCard = ({ document }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isHidden, setIsHidden] = useState(false);
   const [hasCheckedStatus, setHasCheckedStatus] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -145,6 +146,27 @@ export const DocumentCard = ({ document }) => {
     }
   };
 
+  const handleInteraction = async (type) => {
+    setIsDropdownOpen(false);
+
+    // Optimistic UI for hiding
+    if (type === "hidden") {
+      setIsHidden(true);
+      toast.success("Document hidden from your feed");
+    } else if (type === "more_like_this") {
+      toast.success("We'll show you more content like this");
+    }
+
+    try {
+      await apiService.recordInteraction(document._id, type);
+    } catch (error) {
+      console.error("Error recording interaction:", error);
+      // Revert optimistic update if needed, but for 'hidden' it's less critical if generic error
+      if (type === "hidden") setIsHidden(false);
+      toast.error("Failed to update preferences");
+    }
+  };
+
   const isOwner =
     user &&
     document.userId &&
@@ -152,6 +174,8 @@ export const DocumentCard = ({ document }) => {
       user.userId === document.userId._id ||
       user._id === document.userId ||
       user.userId === document.userId);
+
+  if (isHidden) return null;
 
   return (
     <>
@@ -276,8 +300,7 @@ export const DocumentCard = ({ document }) => {
                         label="Show more like this"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setIsDropdownOpen(false);
-                          router.push(`/?category=${document.category}`);
+                          handleInteraction("more_like_this");
                         }}
                       />
                       <div className="border-t border-dark-600" />
@@ -286,8 +309,7 @@ export const DocumentCard = ({ document }) => {
                         label="Don't show again"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setIsDropdownOpen(false);
-                          toast.success("Document hidden");
+                          handleInteraction("hidden");
                         }}
                       />
                       <DropdownItem

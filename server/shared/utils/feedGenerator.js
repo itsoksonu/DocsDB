@@ -1,24 +1,37 @@
-import Document from '../models/Document.js';
-import { getSponsoredDocuments } from './adManager.js';
-import { getUserPreferences } from './userPreferences.js';
-import logger from './logger.js';
+import Document from "../models/Document.js";
+import UserInteraction from "../models/UserInteraction.js";
+import { getSponsoredDocuments } from "./adManager.js";
+import { getUserPreferences } from "./userPreferences.js";
+import logger from "./logger.js";
 
 export async function generateFeed({
   userId,
   cursor,
   limit = 20,
   category = null,
-  sort = 'newest',
-  includeAds = true
+  sort = "newest",
+  includeAds = true,
 }) {
   try {
     const baseQuery = {
-      status: 'processed',
-      visibility: 'public'
+      status: "processed",
+      visibility: "public",
     };
 
     if (category) {
       baseQuery.category = category;
+    }
+
+    // Filter out hidden documents
+    if (userId && userId !== "public") {
+      const hiddenDocs = await UserInteraction.find({
+        userId,
+        type: "hidden",
+      }).distinct("documentId");
+
+      if (hiddenDocs.length > 0) {
+        baseQuery._id = { $nin: hiddenDocs };
+      }
     }
 
     const totalDocs = await Document.countDocuments(baseQuery);
@@ -26,7 +39,7 @@ export async function generateFeed({
     const fetchQuery = { ...baseQuery };
 
     if (cursor) {
-      const cursorDoc = await Document.findById(cursor).select('createdAt');
+      const cursorDoc = await Document.findById(cursor).select("createdAt");
       if (cursorDoc) {
         fetchQuery.createdAt = { $lt: cursorDoc.createdAt };
       }
@@ -34,20 +47,20 @@ export async function generateFeed({
 
     let sortOptions = {};
     switch (sort) {
-      case 'popular':
+      case "popular":
         sortOptions = { viewsCount: -1, createdAt: -1 };
         break;
-      case 'relevant':
+      case "relevant":
         sortOptions = await getRelevanceSort(userId);
         break;
-      case 'newest':
+      case "newest":
       default:
         sortOptions = { createdAt: -1 };
     }
 
     const documents = await Document.find(fetchQuery)
-      .select('-metadata -embeddingsId')
-      .populate('userId', 'name')
+      .select("-metadata -embeddingsId")
+      .populate("userId", "name")
       .sort(sortOptions)
       .limit(limit + 10);
 
@@ -59,9 +72,10 @@ export async function generateFeed({
 
     feedDocuments = feedDocuments.slice(0, limit);
 
-    const nextCursor = feedDocuments.length > 0 
-      ? feedDocuments[feedDocuments.length - 1]._id 
-      : null;
+    const nextCursor =
+      feedDocuments.length > 0
+        ? feedDocuments[feedDocuments.length - 1]._id
+        : null;
 
     const userPrefs = await getUserPreferences(userId);
 
@@ -72,17 +86,16 @@ export async function generateFeed({
         nextCursor,
         limit,
         totalReturned: feedDocuments.length,
-        total: totalDocs
+        total: totalDocs,
       },
       metadata: {
         sort,
         category,
-        personalized: userPrefs !== null
-      }
+        personalized: userPrefs !== null,
+      },
     };
-
   } catch (error) {
-    logger.error('Error generating feed:', error);
+    logger.error("Error generating feed:", error);
     throw error;
   }
 }
@@ -98,7 +111,7 @@ async function injectAds(documents, userId) {
   try {
     const adFrequency = 5; // Inject ad every 5 documents
     const sponsoredDocs = await getSponsoredDocuments(10); // Get more than needed
-    
+
     if (sponsoredDocs.length === 0) {
       return documents;
     }
@@ -114,7 +127,7 @@ async function injectAds(documents, userId) {
           const adDoc = {
             ...sponsoredDocs[adIndex].toObject(),
             isSponsored: true,
-            adId: `ad_${Date.now()}_${adIndex}`
+            adId: `ad_${Date.now()}_${adIndex}`,
           };
           result.push(adDoc);
           adIndex++;
@@ -124,39 +137,61 @@ async function injectAds(documents, userId) {
 
     return result;
   } catch (error) {
-    logger.error('Error injecting ads:', error);
+    logger.error("Error injecting ads:", error);
     return documents;
   }
 }
 
 export async function generatePersonalizedFeed(userId, limit = 20) {
   const userPrefs = await getUserPreferences(userId);
-  
+
   if (!userPrefs || !userPrefs.preferredCategories) {
-    return generateFeed({ userId, limit, sort: 'popular' });
+    return generateFeed({ userId, limit, sort: "popular" });
   }
 
+  // Get explicit positive signals
+  const likedDocs = await UserInteraction.find({
+    userId,
+    type: "more_like_this",
+  }).populate("documentId");
+
+  const likedCategories = likedDocs
+    .map((i) => i.documentId?.category)
+    .filter(Boolean);
+
+  // Combine explicit signals with preferences
+  const allPreferredCategories = [
+    ...new Set([...userPrefs.preferredCategories, ...likedCategories]),
+  ];
+
+  const hiddenDocs = await UserInteraction.find({
+    userId,
+    type: "hidden",
+  }).distinct("documentId");
+
   const preferredDocs = await Document.find({
-    status: 'processed',
-    visibility: 'public',
-    category: { $in: userPrefs.preferredCategories }
+    status: "processed",
+    visibility: "public",
+    category: { $in: allPreferredCategories },
+    _id: { $nin: hiddenDocs },
   })
-  .select('-metadata -embeddingsId')
-  .populate('userId', 'name')
-  .sort({ viewsCount: -1, createdAt: -1 })
-  .limit(limit);
+    .select("-metadata -embeddingsId")
+    .populate("userId", "name")
+    .sort({ viewsCount: -1, createdAt: -1 })
+    .limit(limit);
 
   if (preferredDocs.length < limit) {
     const remaining = limit - preferredDocs.length;
     const trendingDocs = await Document.find({
-      status: 'processed',
-      visibility: 'public',
-      category: { $nin: userPrefs.preferredCategories }
+      status: "processed",
+      visibility: "public",
+      category: { $nin: userPrefs.preferredCategories },
+      _id: { $nin: hiddenDocs },
     })
-    .select('-metadata -embeddingsId')
-    .populate('userId', 'name')
-    .sort({ viewsCount: -1, createdAt: -1 })
-    .limit(remaining);
+      .select("-metadata -embeddingsId")
+      .populate("userId", "name")
+      .sort({ viewsCount: -1, createdAt: -1 })
+      .limit(remaining);
 
     preferredDocs.push(...trendingDocs);
   }
@@ -166,12 +201,12 @@ export async function generatePersonalizedFeed(userId, limit = 20) {
   return {
     documents: feedDocuments,
     pagination: {
-      hasMore: false, 
-      limit
+      hasMore: false,
+      limit,
     },
     metadata: {
-      sort: 'personalized',
-      personalized: true
-    }
+      sort: "personalized",
+      personalized: true,
+    },
   };
 }
