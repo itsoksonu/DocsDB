@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { X, Download, Share2, Copy, Check } from "../../icons";
 import ShareCard from "./ShareCard";
-import domtoimage from "dom-to-image-more";
+
 import toast from "react-hot-toast";
 
 export const ShareModal = ({ isOpen, onClose, document: doc }) => {
@@ -43,6 +43,8 @@ export const ShareModal = ({ isOpen, onClose, document: doc }) => {
     setIsCapturing(true);
 
     try {
+      const domtoimage = (await import("dom-to-image-more")).default;
+
       // Wait for fonts and images to load
       await document.fonts.ready;
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -130,7 +132,7 @@ export const ShareModal = ({ isOpen, onClose, document: doc }) => {
                 opacity: isCapturing ? 0.3 : 1,
                 transition: "opacity 0.2s",
                 pointerEvents: isCapturing ? "none" : "auto",
-                marginBottom: "-120px"
+                marginBottom: "-120px",
               }}
             >
               <ShareCard document={doc} />
