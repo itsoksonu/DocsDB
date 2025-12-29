@@ -175,6 +175,7 @@ router.get(
       .default("all"),
     query("search").optional().isString().trim(),
   ],
+  rateLimitMiddleware("search"),
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -632,6 +633,7 @@ router.get(
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
     query("search").optional().isString().trim(),
   ],
+  rateLimitMiddleware("search"),
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
