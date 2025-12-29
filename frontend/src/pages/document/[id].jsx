@@ -24,29 +24,37 @@ import toast from "react-hot-toast";
 import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
 import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
+import axios from "axios";
 
-const DocumentViewerPage = () => {
+const DocumentViewerPage = ({
+  initialDocument,
+  initialViewUrl,
+  initialRelatedDocs,
+  error: serverError,
+}) => {
   const router = useRouter();
   const { id } = router.query;
   const { user } = useAuth();
 
-  const [document, setDocument] = useState(null);
-  const [viewUrl, setViewUrl] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [document, setDocument] = useState(initialDocument);
+  const [viewUrl, setViewUrl] = useState(initialViewUrl);
+  const [loading, setLoading] = useState(!initialDocument && !serverError);
+  const [error, setError] = useState(serverError);
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [relatedDocs, setRelatedDocs] = useState([]);
+  const [relatedDocs, setRelatedDocs] = useState(initialRelatedDocs || []);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [csvData, setCsvData] = useState([]);
   const [csvLoading, setCsvLoading] = useState(false);
 
+  // Sync state with props if they change (e.g. shallow routing)
   useEffect(() => {
-    if (id) {
-      loadDocument();
-      loadRelatedDocuments();
-    }
-  }, [id]);
+    if (initialDocument) setDocument(initialDocument);
+    if (initialViewUrl) setViewUrl(initialViewUrl);
+    if (initialRelatedDocs) setRelatedDocs(initialRelatedDocs);
+    if (serverError) setError(serverError);
+    if (initialDocument) setLoading(false);
+  }, [initialDocument, initialViewUrl, initialRelatedDocs, serverError]);
 
   useEffect(() => {
     if (document && user) {
@@ -57,23 +65,25 @@ const DocumentViewerPage = () => {
     }
   }, [document, user, viewUrl]);
 
-  const loadDocument = async () => {
+  // Loading related docs on client if not provided by SSR (fallback)
+  useEffect(() => {
+    if (id && !initialRelatedDocs) {
+      loadRelatedDocuments();
+    }
+  }, [id, initialRelatedDocs]);
+
+  const loadRelatedDocuments = async () => {
     try {
-      setLoading(true);
-      setError(null);
-
-      const docResponse = await apiService.client.get(`/documents/${id}`);
-      const docData = docResponse.data.data.document;
-      setDocument(docData);
-
-      const viewResponse = await apiService.client.get(`/documents/${id}/view`);
-      setViewUrl(viewResponse.data.data.viewUrl);
+      if (!id) return;
+      const response = await apiService.getRelatedDocuments(id, 6);
+      const docs = response.data?.data || response.data || [];
+      if (Array.isArray(docs)) {
+        setRelatedDocs(docs);
+      } else {
+        setRelatedDocs([]);
+      }
     } catch (err) {
-      console.error("Error loading document:", err);
-      setError(err.response?.data?.message || "Failed to load document");
-      toast.error("Failed to load document");
-    } finally {
-      setLoading(false);
+      console.error("Error loading related documents:", err);
     }
   };
 
@@ -95,20 +105,6 @@ const DocumentViewerPage = () => {
       toast.error("Failed to load CSV preview");
     } finally {
       setCsvLoading(false);
-    }
-  };
-
-  const loadRelatedDocuments = async () => {
-    try {
-      const response = await apiService.getRelatedDocuments(id, 6);
-      const docs = response.data?.data || response.data || [];
-      if (Array.isArray(docs)) {
-        setRelatedDocs(docs);
-      } else {
-        setRelatedDocs([]);
-      }
-    } catch (err) {
-      console.error("Error loading related documents:", err);
     }
   };
 
@@ -338,11 +334,61 @@ const DocumentViewerPage = () => {
     );
   }
 
+  // SEO Helpers
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://docsdb.com";
+  const canonicalUrl = `${siteUrl}/document/${document._id}`;
+  const imageUrl =
+    document.thumbnailUrl || `${siteUrl}/assets/og-placeholder.png`; // Fallback image
+
+  // JSON-LD Structured Data
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "DigitalDocument",
+    headline: document.generatedTitle,
+    name: document.generatedTitle,
+    description: document.generatedDescription,
+    datePublished: document.createdAt,
+    url: canonicalUrl,
+    author: {
+      "@type": "Person",
+      name: document.userId?.name || "Unknown",
+    },
+    fileFormat: document.fileType,
+    thumbnailUrl: imageUrl,
+  };
+
   return (
     <>
       <Head>
         <title>{document.generatedTitle} - DocsDB</title>
         <meta name="description" content={document.generatedDescription} />
+        <link rel="canonical" href={canonicalUrl} />
+
+        {/* Open Graph / Facebook */}
+        <meta property="og:type" content="article" />
+        <meta property="og:url" content={canonicalUrl} />
+        <meta property="og:title" content={document.generatedTitle} />
+        <meta
+          property="og:description"
+          content={document.generatedDescription}
+        />
+        <meta property="og:image" content={imageUrl} />
+
+        {/* Twitter */}
+        <meta property="twitter:card" content="summary_large_image" />
+        <meta property="twitter:url" content={canonicalUrl} />
+        <meta property="twitter:title" content={document.generatedTitle} />
+        <meta
+          property="twitter:description"
+          content={document.generatedDescription}
+        />
+        <meta property="twitter:image" content={imageUrl} />
+
+        {/* Schema.org JSON-LD */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
       </Head>
 
       <div className="min-h-screen bg-dark-950 text-white">
@@ -577,5 +623,56 @@ const DocumentViewerPage = () => {
     </>
   );
 };
+
+export async function getServerSideProps(context) {
+  const { id } = context.params;
+  const apiUrl =
+    process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
+
+  try {
+    // 1. Fetch document view data (includes doc details and viewUrl)
+    // Note: We're not passing auth token here, so only public documents will be fetched.
+    // If the document is private, the backend should return 403 or 404, which we handle.
+    const viewResponse = await axios.get(`${apiUrl}/documents/${id}/view`);
+
+    if (!viewResponse.data?.success) {
+      return { notFound: true };
+    }
+
+    const { document, viewUrl } = viewResponse.data.data;
+
+    // 2. Fetch related documents
+    let relatedDocs = [];
+    try {
+      const relatedResponse = await axios.get(`${apiUrl}/feed/related/${id}`, {
+        params: { limit: 6 },
+      });
+      relatedDocs = relatedResponse.data?.data || [];
+    } catch (err) {
+      console.error("Error fetching related docs for SSR:", err.message);
+      // Don't fail the whole page if related docs fail
+    }
+
+    return {
+      props: {
+        initialDocument: document,
+        initialViewUrl: viewUrl || null,
+        initialRelatedDocs: relatedDocs,
+      },
+    };
+  } catch (error) {
+    console.error("SSR Error:", error.message);
+    if (error.response?.status === 404 || error.response?.status === 403) {
+      return { notFound: true };
+    }
+
+    // For other errors, we can return an error state or 404
+    return {
+      props: {
+        error: error.message || "Failed to load document",
+      },
+    };
+  }
+}
 
 export default DocumentViewerPage;

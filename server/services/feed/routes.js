@@ -109,6 +109,46 @@ async function addSignedThumbnails(documents) {
   );
 }
 
+// Get all document IDs for sitemap
+router.get("/sitemap-ids", async (req, res, next) => {
+  try {
+    const cacheKey = "sitemap:ids";
+
+    if (redisClient) {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        return res.json({
+          success: true,
+          data: JSON.parse(cached),
+        });
+      }
+    }
+
+    const documents = await Document.find({
+      status: "processed",
+      visibility: "public",
+    })
+      .select("_id updatedAt")
+      .lean();
+
+    const result = documents.map((doc) => ({
+      _id: doc._id,
+      updatedAt: doc.updatedAt,
+    }));
+
+    if (redisClient) {
+      await redisClient.setEx(cacheKey, 3600, JSON.stringify(result)); // Cache for 1 hour
+    }
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // get documents
 router.get(
   "/",
