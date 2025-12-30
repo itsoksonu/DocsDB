@@ -15,7 +15,11 @@ router.patch("/me", authMiddleware, async (req, res, next) => {
 
     const updates = {};
     if (name) updates.name = name.trim();
-    if (avatar) updates.avatar = avatar;
+
+    // Only update avatar if it's a key (not a full URL)
+    if (avatar && !avatar.startsWith("http")) {
+      updates.avatar = avatar;
+    }
 
     const user = await User.findByIdAndUpdate(
       userId,
@@ -127,11 +131,42 @@ router.get("/me", authMiddleware, async (req, res, next) => {
     const userObj = user.toObject();
 
     // Generate signed URL for avatar if it exists and is an S3 key
-    if (userObj.avatar && !userObj.avatar.startsWith("http")) {
-      try {
-        userObj.avatar = await s3.generateViewUrl(userObj.avatar);
-      } catch (error) {
-        console.error("Error generating avatar URL:", error);
+    // Fix broken avatars (lazy migration) and generate signed URL
+    if (userObj.avatar) {
+      // Check if avatar is mistakenly stored as a full S3 URL
+      if (
+        userObj.avatar.includes("amazonaws.com") &&
+        userObj.avatar.startsWith("http")
+      ) {
+        try {
+          // Extract key from URL
+          // Format usually: https://bucket.s3.region.amazonaws.com/key?params
+          const urlObj = new URL(userObj.avatar);
+          const path = urlObj.pathname; // /key
+          const key = path.startsWith("/") ? path.slice(1) : path;
+
+          // Verify it looks like a file key (e.g. avatars/...)
+          if (key && !key.includes("amazonaws.com")) {
+            console.log(
+              `Fixing stale encoded avatar URL for user ${user._id}: ${key}`
+            );
+
+            // Update DB asynchronously to fix the corruption
+            await User.findByIdAndUpdate(user._id, { avatar: key });
+            userObj.avatar = key; // Use the fixed key for generating new URL
+          }
+        } catch (e) {
+          console.error("Error parsing stale avatar URL:", e);
+        }
+      }
+
+      // Generate signed URL if we have a key (not a URL)
+      if (!userObj.avatar.startsWith("http")) {
+        try {
+          userObj.avatar = await s3.generateViewUrl(userObj.avatar);
+        } catch (error) {
+          console.error("Error generating avatar URL:", error);
+        }
       }
     }
 
