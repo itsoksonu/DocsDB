@@ -535,7 +535,21 @@ router.post(
         });
       }
 
-      await user.saveDocument(id);
+      // Check if collectionId is provided
+      const { collectionId } = req.body;
+
+      // Validate collection if provided
+      if (collectionId) {
+        const collectionExists = user.collections.id(collectionId);
+        if (!collectionExists) {
+          return res.status(404).json({
+            success: false,
+            message: "Collection not found",
+          });
+        }
+      }
+
+      await user.saveDocument(id, collectionId);
 
       res.json({
         success: true,
@@ -615,17 +629,141 @@ router.get(
         });
       }
 
-      const isSaved = user.hasSavedDocument(id);
+      const savedDoc = user.savedDocuments.find(
+        (d) => d.documentId.toString() === id
+      );
+      const isSaved = !!savedDoc;
+      const collectionId = savedDoc ? savedDoc.collectionId : null;
 
       res.json({
         success: true,
-        data: { isSaved },
+        data: { isSaved, collectionId },
       });
     } catch (error) {
       next(error);
     }
   }
 );
+
+// Get user collections
+router.get("/user/collections", authMiddleware, async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const User = mongoose.model("User");
+
+    // We need to populate savedDocuments to get thumbnails for the preview
+    const user = await User.findById(userId).populate({
+      path: "savedDocuments.documentId",
+      select: "thumbnailS3Path status",
+    });
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    // Process collections to add metadata (count and latest thumbnail)
+    const collectionsWithMeta = await Promise.all(
+      user.collections.map(async (collection) => {
+        // Filter valid documents for this collection
+        const collectionDocs = user.savedDocuments.filter((doc) => {
+          return (
+            doc.documentId && // Document exists (not null)
+            doc.documentId.status !== "deleted" && // Not deleted
+            doc.collectionId &&
+            doc.collectionId.toString() === collection._id.toString()
+          );
+        });
+
+        const count = collectionDocs.length;
+        let thumbnailUrl = null;
+
+        // Find latest document with a thumbnail
+        // Sort by savedAt descending
+        collectionDocs.sort(
+          (a, b) => new Date(b.savedAt) - new Date(a.savedAt)
+        );
+
+        for (const doc of collectionDocs) {
+          if (doc.documentId.thumbnailS3Path) {
+            try {
+              thumbnailUrl = await s3.generateViewUrl(
+                doc.documentId.thumbnailS3Path
+              );
+              if (thumbnailUrl) break; // Found one, stop looking
+            } catch (err) {
+              logger.error(
+                `Error generating thumbnail for collection preview: ${err}`
+              );
+            }
+          }
+        }
+
+        return {
+          ...collection.toObject(),
+          documentCount: count,
+          thumbnailUrl,
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: collectionsWithMeta,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create new collection
+router.post("/user/collections", authMiddleware, async (req, res, next) => {
+  try {
+    const { name } = req.body;
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Collection name is required",
+      });
+    }
+
+    const userId = req.user.userId;
+    const User = mongoose.model("User");
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    // Check if collection already exists
+    const exists = user.collections.some(
+      (c) => c.name.toLowerCase() === name.trim().toLowerCase()
+    );
+
+    if (exists) {
+      return res.status(400).json({
+        success: false,
+        message: "Collection already exists",
+      });
+    }
+
+    user.collections.push({ name: name.trim() });
+    await user.save();
+
+    // Return the newly created collection (last one)
+    const newCollection = user.collections[user.collections.length - 1];
+
+    res.json({
+      success: true,
+      data: newCollection,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Get user's saved documents
 router.get(
@@ -635,6 +773,7 @@ router.get(
     query("cursor").optional().isString(),
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
     query("search").optional().isString().trim(),
+    query("collectionId").optional().isString(),
   ],
   rateLimitMiddleware("search"),
   async (req, res, next) => {
@@ -646,12 +785,12 @@ router.get(
           .json({ success: false, message: "Invalid parameters" });
       }
 
-      const { cursor, limit, search } = req.query;
+      const { cursor, limit, search, collectionId } = req.query;
       const userId = req.user.userId;
 
       const cacheKey = `saveddocs:${userId}:${search || "all"}:${
-        cursor || "initial"
-      }:${limit}`;
+        collectionId || "all"
+      }:${cursor || "initial"}:${limit}`;
 
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
@@ -668,6 +807,17 @@ router.get(
       });
 
       let valid = user.savedDocuments.filter((d) => d.documentId !== null);
+
+      // Filter by collection
+      if (collectionId && collectionId !== "all") {
+        if (collectionId === "uncategorized") {
+          valid = valid.filter((d) => !d.collectionId);
+        } else {
+          valid = valid.filter(
+            (d) => d.collectionId && d.collectionId.toString() === collectionId
+          );
+        }
+      }
 
       // Filter by search term if provided
       if (search) {

@@ -39,6 +39,13 @@ const ProfilePage = () => {
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const observer = useRef();
 
+  // Collections state
+  const [collections, setCollections] = useState([]);
+  const [selectedCollectionId, setSelectedCollectionId] = useState("all");
+  const [viewMode, setViewMode] = useState("collections"); // 'collections' or 'documents'
+  const [selectedCollectionName, setSelectedCollectionName] =
+    useState("All Saved");
+
   const [uploadLoading, setUploadLoading] = useState(false);
   const [savedLoading, setSavedLoading] = useState(false);
   const [stats, setStats] = useState({ uploadedCount: 0, savedCount: 0 });
@@ -47,7 +54,33 @@ const ProfilePage = () => {
     if (user === null) {
       router.replace("/");
     }
-  }, [user, router]); 
+  }, [user, router]);
+
+  // Handle URL query parameters for tabs
+  useEffect(() => {
+    if (router.isReady && router.query.tab) {
+      const tab = router.query.tab;
+      if (tab === "saved" || tab === "uploaded") {
+        setActiveTab(tab);
+      }
+    }
+  }, [router.isReady, router.query.tab]);
+
+  // Fetch collections when on saved tab
+  useEffect(() => {
+    if (user && activeTab === "saved") {
+      fetchCollections();
+    }
+  }, [user, activeTab]);
+
+  const fetchCollections = async () => {
+    try {
+      const response = await apiService.getCollections();
+      setCollections(response.data || []);
+    } catch (error) {
+      console.error("Error fetching collections:", error);
+    }
+  };
 
   // Debounce search
   useEffect(() => {
@@ -60,9 +93,9 @@ const ProfilePage = () => {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, selectedCollectionId]); // Trigger also when collection changes
 
-  // Fetch stats
+  // Fetch stats...
   useEffect(() => {
     if (user) {
       loadStats();
@@ -78,23 +111,6 @@ const ProfilePage = () => {
     }
   };
 
-  useEffect(() => {
-    if (router.query.tab === "saved") {
-      setActiveTab("saved");
-    } else if (router.query.tab === "uploaded") {
-      setActiveTab("uploaded");
-    }
-  }, [router.query.tab]);
-
-  useEffect(() => {
-    if (user) {
-      setFormData({
-        name: user.name || "",
-        avatar: user.avatar || "",
-      });
-    }
-  }, [user]);
-
   // Reset pagination when tab changes
   useEffect(() => {
     if (user) {
@@ -102,11 +118,18 @@ const ProfilePage = () => {
       setSavedDocs([]);
       setNextCursor(null);
       setHasMore(true);
+      // Reset collection selection when switching/loading tabs
+      if (activeTab === "uploaded") {
+        setSelectedCollectionId("all");
+      } else {
+        // For saved tab, start with collections view
+        setViewMode("collections");
+        setSelectedCollectionId("all");
+        setSelectedCollectionName("All Saved");
+      }
       loadDocuments(true);
     }
   }, [activeTab, user]);
-
-  // Search effect handled above with debounce
 
   const lastElementRef = useCallback(
     (node) => {
@@ -146,6 +169,10 @@ const ProfilePage = () => {
             : [...prev, ...response.data.documents]
         );
       } else {
+        // Add collection filter
+        if (selectedCollectionId !== "all") {
+          params.collectionId = selectedCollectionId;
+        }
         response = await apiService.getSavedDocuments(params);
         setSavedDocs((prev) =>
           isInitial
@@ -267,12 +294,32 @@ const ProfilePage = () => {
 
       <div className="pt-20 md:pt-24 max-w-6xl mx-auto px-2 md:px-4 pb-8">
         {/* Profile Header */}
-        <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl md:rounded-2xl p-4 md:p-8 mb-6 md:mb-8 border border-dark-800/50">
-          <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 md:gap-6 w-full md:w-auto">
-              {/* Avatar Section */}
-              <div className="relative flex-shrink-0">
-                <div className="w-20 h-20 md:w-24 md:h-24 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white text-xl md:text-2xl font-medium relative overflow-hidden group">
+        <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl md:rounded-2xl p-4 md:p-8 mb-6 md:mb-8 border border-dark-800/50 relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-4 transition-opacity">
+            {!editing ? (
+              <button
+                onClick={handleEditToggle}
+                className="p-2 bg-dark-800 hover:bg-dark-700 text-dark-200 hover:text-white rounded-lg transition-colors"
+                title="Edit Profile"
+              >
+                <Edit size={18} />
+              </button>
+            ) : (
+              <button
+                onClick={handleEditToggle}
+                className="p-2 bg-dark-800 hover:bg-dark-700 text-dark-200 hover:text-white rounded-lg transition-colors"
+                title="Cancel"
+              >
+                <X size={18} />
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-col md:flex-row items-center gap-6 md:gap-8">
+            {/* Avatar Section */}
+            <div className="relative group/avatar">
+              <div className="w-24 h-24 md:w-32 md:h-32 rounded-full bg-white p-0.5">
+                <div className="w-full h-full rounded-full bg-dark-900 overflow-hidden relative">
                   {user.avatar ? (
                     <img
                       src={user.avatar}
@@ -280,93 +327,87 @@ const ProfilePage = () => {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    user.name?.charAt(0).toUpperCase()
+                    <div className="w-full h-full flex items-center justify-center text-3xl md:text-4xl font-bold text-white">
+                      {user.name?.charAt(0).toUpperCase()}
+                    </div>
                   )}
-
-                  {/* Overlay for upload */}
-                  <label
-                    className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer z-10"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Image size={24} className="text-white" />
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept="image/*"
-                      onChange={handleAvatarUpload}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {/* User Info */}
-              <div className="flex-1 w-full text-center sm:text-left">
-                {editing ? (
-                  <div className="space-y-3 md:space-y-4">
-                    <div>
-                      <label className="block text-xs md:text-sm font-medium text-dark-300 mb-1.5 md:mb-2">
-                        Name
-                      </label>
+                  {/* Avatar Upload Overlay - Only visible when editing */}
+                  {editing && (
+                    <label className="absolute inset-0 bg-black/50 flex items-center justify-center cursor-pointer transition-opacity hover:opacity-100">
                       <input
-                        type="text"
-                        value={formData.name}
-                        onChange={(e) =>
-                          handleInputChange("name", e.target.value)
-                        }
-                        className="w-full bg-dark-800/50 border border-dark-700 rounded-lg px-3 md:px-4 py-2 text-sm md:text-base text-white focus:outline-none focus:border-blue-500 transition-colors"
-                        placeholder="Enter your name"
+                        type="file"
+                        accept="image/*"
+                        onChange={handleAvatarUpload}
+                        className="hidden"
                       />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2 md:space-y-3">
-                    <h1 className="text-2xl md:text-3xl font-bold text-white">
-                      {user.name}
-                    </h1>
-                    <div className="flex items-center justify-center sm:justify-start gap-2 text-dark-300 text-sm md:text-base">
-                      <Mail size={14} className="md:w-4 md:h-4 flex-shrink-0" />
-                      <span className="truncate">{user.email}</span>
-                    </div>
-                    <div className="flex items-center justify-center sm:justify-start gap-3 md:gap-4 text-xs md:text-sm text-dark-400">
-                      <span className="whitespace-nowrap">
-                        {uploadedCount} uploaded
-                      </span>
-                      <span className="whitespace-nowrap">
-                        {savedCount} saved
-                      </span>
-                    </div>
-                  </div>
-                )}
+                      <Image size={24} className="text-white" />
+                    </label>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Edit/Save Buttons */}
-            <div className="flex justify-center md:justify-start gap-2 w-full md:w-auto">
+            {/* User Info Section */}
+            <div className="flex-1 text-center md:text-left space-y-4">
               {editing ? (
-                <>
-                  <button
-                    onClick={handleSaveProfile}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors text-sm md:text-base flex-1 md:flex-initial"
-                  >
-                    <Save size={14} className="md:w-4 md:h-4" />
-                    Save
-                  </button>
-                  <button
-                    onClick={handleEditToggle}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors text-sm md:text-base flex-1 md:flex-initial"
-                  >
-                    <X size={14} className="md:w-4 md:h-4" />
-                    Cancel
-                  </button>
-                </>
+                <div className="space-y-4 max-w-md mx-auto md:mx-0">
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1 ml-1">
+                      Full Name
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) =>
+                        handleInputChange("name", e.target.value)
+                      }
+                      className="w-full bg-dark-800 border border-dark-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500 transition-colors"
+                      placeholder="Enter your name"
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleSaveProfile}
+                      className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Save size={18} />
+                      Save Changes
+                    </button>
+                    <button
+                      onClick={handleEditToggle}
+                      className="px-4 py-2 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <button
-                  onClick={handleEditToggle}
-                  className="flex items-center justify-center gap-2 px-4 py-2 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors text-sm md:text-base w-full md:w-auto"
-                >
-                  <Edit size={14} className="md:w-4 md:h-4" />
-                  Edit Profile
-                </button>
+                <>
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">
+                      {user.name}
+                    </h1>
+                    <div className="flex items-center justify-center md:justify-start gap-2 text-dark-400 bg-dark-800/50 w-fit mx-auto md:mx-0 px-3 py-1 rounded-full">
+                      <Mail size={14} />
+                      <span className="text-sm">{user.email}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-center md:justify-start gap-6 text-sm">
+                    <div className="text-center md:text-left">
+                      <div className="text-xl font-bold text-white">
+                        {stats.uploadedCount}
+                      </div>
+                      <div className="text-dark-400">Uploads</div>
+                    </div>
+                    <div className="w-px h-8 bg-dark-800" />
+                    <div className="text-center md:text-left">
+                      <div className="text-xl font-bold text-white">
+                        {stats.savedCount}
+                      </div>
+                      <div className="text-dark-400">Saved</div>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -374,127 +415,230 @@ const ProfilePage = () => {
 
         {/* Tabs Section */}
         <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl md:rounded-2xl p-3 md:p-6 border border-dark-800/50">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-dark-800 mb-4 md:mb-6 pb-2">
-            {/* Tabs Navigation */}
-            <div className='flex items-center justify-center md:justify-start gap-1.5 md:gap-2 flex-1 md:flex-none px-3 md:px-6 py-2.5 md:py-3'
->
-              <button
-                onClick={() => setActiveTab("uploaded")}
-                className={`flex items-center gap-1.5 md:gap-2 px-3 md:px-6 py-2.5 md:py-3 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
-                  activeTab === "uploaded"
-                    ? "border-blue-500 text-blue-500"
-                    : "border-transparent text-dark-400 hover:text-white"
-                }`}
-              >
-                <Upload size={16} className="md:w-[18px] md:h-[18px]" />
-                <span className="hidden sm:inline">Uploaded Documents</span>
-                <span className="sm:hidden">Uploaded</span>
-                <span className="bg-dark-800 text-dark-300 text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-full ml-1 md:ml-2">
-                  {uploadedCount}
-                </span>
-              </button>
-              <button
-                onClick={() => setActiveTab("saved")}
-                className={`flex items-center gap-1.5 md:gap-2 px-3 md:px-6 py-2.5 md:py-3 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
-                  activeTab === "saved"
-                    ? "border-blue-500 text-blue-500"
-                    : "border-transparent text-dark-400 hover:text-white"
-                }`}
-              >
-                <Bookmark size={16} className="md:w-[18px] md:h-[18px]" />
-                <span className="hidden sm:inline">Saved Documents</span>
-                <span className="sm:hidden">Saved</span>
-                <span className="bg-dark-800 text-dark-300 text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-full ml-1 md:ml-2">
-                  {savedCount}
-                </span>
-              </button>
-            </div>
+          <div className="flex flex-col gap-4 border-b border-dark-800 mb-4 md:mb-6 pb-2">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              {/* Tabs Navigation */}
+              <div className="flex items-center justify-center md:justify-start gap-1.5 md:gap-2 flex-1 md:flex-none px-3 md:px-6 py-2.5 md:py-3">
+                <button
+                  onClick={() => setActiveTab("uploaded")}
+                  className={`flex items-center gap-1.5 md:gap-2 px-3 md:px-6 py-2.5 md:py-3 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
+                    activeTab === "uploaded"
+                      ? "border-blue-500 text-blue-500"
+                      : "border-transparent text-dark-400 hover:text-white"
+                  }`}
+                >
+                  <Upload size={16} className="md:w-[18px] md:h-[18px]" />
+                  <span className="hidden sm:inline">Uploaded Documents</span>
+                  <span className="sm:hidden">Uploaded</span>
+                  <span className="bg-dark-800 text-dark-300 text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-full ml-1 md:ml-2">
+                    {uploadedCount}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setActiveTab("saved")}
+                  className={`flex items-center gap-1.5 md:gap-2 px-3 md:px-6 py-2.5 md:py-3 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
+                    activeTab === "saved"
+                      ? "border-blue-500 text-blue-500"
+                      : "border-transparent text-dark-400 hover:text-white"
+                  }`}
+                >
+                  <Bookmark size={16} className="md:w-[18px] md:h-[18px]" />
+                  <span className="hidden sm:inline">Saved Documents</span>
+                  <span className="sm:hidden">Saved</span>
+                  <span className="bg-dark-800 text-dark-300 text-xs px-1.5 md:px-2 py-0.5 md:py-1 rounded-full ml-1 md:ml-2">
+                    {savedCount}
+                  </span>
+                </button>
+              </div>
 
-            {/* Search Bar */}
-            <div className="relative w-full md:w-64 mb-2 md:mb-0">
-              <input
-                type="text"
-                placeholder={`Search ${activeTab}...`}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-dark-800 border border-dark-700 rounded-lg pl-9 pr-4 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
-              />
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"
-              />
+              {/* Search Bar */}
+              <div className="relative w-full md:w-64 mb-2 md:mb-0">
+                <input
+                  type="text"
+                  placeholder={`Search ${activeTab}...`}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-dark-800 border border-dark-700 rounded-lg pl-9 pr-4 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"
+                />
+              </div>
             </div>
           </div>
 
           {/* Tab Content */}
           <div className="min-h-[400px]">
-            {showLoading ? (
-              <div className="flex flex-wrap gap-4 md:gap-6 justify-center">
-                {Array.from({ length: 12 }).map((_, i) => (
-                  <DocumentSkeleton key={i} />
+            {activeTab === "saved" && viewMode === "collections" ? (
+              // Collections Grid View
+              <div className="flex flex-wrap gap-2 md:gap-6 justify-center md:justify-start">
+                {/* All Saved "Folder" */}
+                <button
+                  onClick={() => {
+                    setSelectedCollectionId("all");
+                    setSelectedCollectionName("All Saved");
+                    setViewMode("documents");
+                  }}
+                  className="group flex flex-col items-center justify-center p-6 bg-dark-800 border border-dark-700 rounded-xl hover:bg-dark-750 hover:border-blue-500/50 transition-all cursor-pointer w-40 h-[15rem]"
+                >
+                  <div className="p-4 bg-blue-500/10 rounded-full mb-3 group-hover:scale-110 transition-transform">
+                    <Bookmark size={32} className="text-blue-500" />
+                  </div>
+                  <h3 className="font-semibold text-white mb-1">All Saved</h3>
+                  <span className="text-xs text-dark-400">
+                    {savedCount} items
+                  </span>
+                </button>
+
+                {collections.map((collection) => (
+                  <button
+                    key={collection._id}
+                    onClick={() => {
+                      setSelectedCollectionId(collection._id);
+                      setSelectedCollectionName(collection.name);
+                      setViewMode("documents");
+                    }}
+                    className="group flex flex-col items-center justify-center p-0 bg-dark-800 border border-dark-700 rounded-xl hover:bg-dark-750 hover:border-purple-500/50 transition-all cursor-pointer w-40 h-[15rem] relative overflow-hidden"
+                  >
+                    {collection.thumbnailUrl ? (
+                      <>
+                        {/* Background Image with Overlay */}
+                        <div className="absolute inset-0">
+                          <img
+                            src={collection.thumbnailUrl}
+                            alt={collection.name}
+                            className="w-full h-full object-cover opacity-50 group-hover:opacity-40 group-hover:scale-105 transition-all duration-500"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-dark-900/90 via-dark-900/40 to-dark-900/20" />
+                        </div>
+
+                        {/* Content */}
+                        <div className="relative z-10 flex flex-col items-center justify-center w-full h-full p-6">
+                          <div className="p-3 bg-purple-500/20 backdrop-blur-sm rounded-full mb-3 shadow-lg">
+                            <Bookmark size={24} className="text-purple-400" />
+                          </div>
+                          <h3 className="font-semibold text-white mb-1 truncate w-full text-center drop-shadow-md">
+                            {collection.name}
+                          </h3>
+                          <span className="text-xs text-dark-200 font-medium px-2 py-0.5 bg-dark-900/50 rounded-full backdrop-blur-sm">
+                            {collection.documentCount || 0} items
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center w-full h-full p-6">
+                        <div className="p-4 bg-purple-500/10 rounded-full mb-3 group-hover:scale-110 transition-transform">
+                          <Bookmark size={32} className="text-purple-500" />
+                        </div>
+                        <h3 className="font-semibold text-white mb-1 truncate w-full text-center">
+                          {collection.name}
+                        </h3>
+                        <span className="text-xs text-dark-400">
+                          {collection.documentCount || 0} items
+                        </span>
+                      </div>
+                    )}
+                  </button>
                 ))}
               </div>
-            ) : currentDocs.length > 0 ? (
+            ) : (
+              // Documents View
               <>
-                <div className="flex flex-wrap gap-4 md:gap-6 justify-center">
-                  {currentDocs.map((document, index) => {
-                    if (currentDocs.length === index + 1) {
-                      return (
-                        <div ref={lastElementRef} key={document._id}>
-                          <DocumentCard document={document} />
-                        </div>
-                      );
-                    } else {
-                      return (
-                        <DocumentCard key={document._id} document={document} />
-                      );
-                    }
-                  })}
-                </div>
-                {isFetchingMore && (
-                  <div className="flex flex-wrap gap-4 md:gap-6 justify-center mt-6">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <DocumentSkeleton key={`skeleton-${i}`} />
+                {/* Back button for Saved Tab */}
+                {activeTab === "saved" && (
+                  <div className="flex items-center gap-2 mb-6">
+                    <button
+                      onClick={() => {
+                        setViewMode("collections");
+                        setSelectedCollectionId("all"); // Reset selection when going back? Or keep it? Keeping it implies we might show it selected in grid. Resetting is safer for now.
+                      }}
+                      className="flex items-center gap-1 text-sm text-dark-400 hover:text-white transition-colors"
+                    >
+                      <span className="text-lg">←</span> Back to Collections
+                    </button>
+                    <div className="h-4 w-px bg-dark-700 mx-2" />
+                    <span className="text-sm font-medium text-white">
+                      {selectedCollectionName}
+                    </span>
+                  </div>
+                )}
+
+                {showLoading ? (
+                  <div className="flex flex-wrap gap-4 md:gap-6 justify-center">
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <DocumentSkeleton key={i} />
                     ))}
+                  </div>
+                ) : currentDocs.length > 0 ? (
+                  <>
+                    <div className="flex flex-wrap gap-4 md:gap-6 justify-center">
+                      {currentDocs.map((document, index) => {
+                        if (currentDocs.length === index + 1) {
+                          return (
+                            <div ref={lastElementRef} key={document._id}>
+                              <DocumentCard document={document} />
+                            </div>
+                          );
+                        } else {
+                          return (
+                            <DocumentCard
+                              key={document._id}
+                              document={document}
+                            />
+                          );
+                        }
+                      })}
+                    </div>
+                    {isFetchingMore && (
+                      <div className="flex flex-wrap gap-4 md:gap-6 justify-center mt-6">
+                        {Array.from({ length: 4 }).map((_, i) => (
+                          <DocumentSkeleton key={`skeleton-${i}`} />
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center py-12 md:py-16 px-4">
+                    <div className="w-20 h-20 md:w-24 md:h-24 bg-dark-800/50 rounded-full flex items-center justify-center mx-auto mb-4">
+                      {activeTab === "uploaded" ? (
+                        <Upload
+                          size={28}
+                          className="md:w-8 md:h-8 text-dark-400"
+                        />
+                      ) : (
+                        <Bookmark
+                          size={28}
+                          className="md:w-8 md:h-8 text-dark-400"
+                        />
+                      )}
+                    </div>
+                    <h3 className="text-lg md:text-xl font-semibold text-white mb-2">
+                      {searchQuery
+                        ? "No documents found"
+                        : activeTab === "uploaded"
+                        ? "No documents uploaded yet"
+                        : "No documents in this collection"}
+                    </h3>
+                    <p className="text-sm md:text-base text-dark-400 mb-6 max-w-md mx-auto">
+                      {searchQuery
+                        ? `No ${activeTab} documents match "${searchQuery}"`
+                        : activeTab === "uploaded"
+                        ? "Start sharing your knowledge by uploading your first document."
+                        : "Save documents to this collection to see them here."}
+                    </p>
+                    {activeTab === "uploaded" && !searchQuery && (
+                      <button
+                        onClick={handleUploadClick}
+                        className="inline-flex items-center gap-2 px-5 md:px-6 py-2.5 md:py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors text-sm md:text-base"
+                      >
+                        <Upload size={16} className="md:w-[18px] md:h-[18px]" />
+                        Upload Your First Document
+                      </button>
+                    )}
                   </div>
                 )}
               </>
-            ) : (
-              <div className="text-center py-12 md:py-16 px-4">
-                <div className="w-20 h-20 md:w-24 md:h-24 bg-dark-800/50 rounded-full flex items-center justify-center mx-auto mb-4">
-                  {activeTab === "uploaded" ? (
-                    <Upload size={28} className="md:w-8 md:h-8 text-dark-400" />
-                  ) : (
-                    <Bookmark
-                      size={28}
-                      className="md:w-8 md:h-8 text-dark-400"
-                    />
-                  )}
-                </div>
-                <h3 className="text-lg md:text-xl font-semibold text-white mb-2">
-                  {searchQuery
-                    ? "No documents found"
-                    : activeTab === "uploaded"
-                    ? "No documents uploaded yet"
-                    : "No documents saved yet"}
-                </h3>
-                <p className="text-sm md:text-base text-dark-400 mb-6 max-w-md mx-auto">
-                  {searchQuery
-                    ? `No ${activeTab} documents match "${searchQuery}"`
-                    : activeTab === "uploaded"
-                    ? "Start sharing your knowledge by uploading your first document."
-                    : "Save interesting documents to access them quickly later."}
-                </p>
-                {activeTab === "uploaded" && !searchQuery && (
-                  <button
-                    onClick={handleUploadClick}
-                    className="inline-flex items-center gap-2 px-5 md:px-6 py-2.5 md:py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors text-sm md:text-base"
-                  >
-                    <Upload size={16} className="md:w-[18px] md:h-[18px]" />
-                    Upload Your First Document
-                  </button>
-                )}
-              </div>
             )}
           </div>
         </div>

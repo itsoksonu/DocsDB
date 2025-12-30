@@ -20,6 +20,7 @@ import toast from "react-hot-toast";
 import { useAuth } from "../../contexts/AuthContext";
 import { Modal } from "../ui/Modal";
 import { ShareModal } from "./ShareModal";
+import { CollectionModal } from "./CollectionModal";
 
 export const DocumentCard = ({ document }) => {
   const { user } = useAuth();
@@ -34,6 +35,10 @@ export const DocumentCard = ({ document }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
+  // Collection Modal State
+  const [showCollectionModal, setShowCollectionModal] = useState(false);
+  const [savedCollectionId, setSavedCollectionId] = useState(null);
+
   useEffect(() => {
     if (isDropdownOpen && !hasCheckedStatus) {
       checkSavedStatus();
@@ -44,6 +49,7 @@ export const DocumentCard = ({ document }) => {
     try {
       const response = await apiService.checkSavedStatus(document._id);
       setIsSaved(response.data.isSaved);
+      setSavedCollectionId(response.data.collectionId || null);
       setHasCheckedStatus(true);
     } catch (error) {
       console.error("Error checking save status:", error);
@@ -70,22 +76,40 @@ export const DocumentCard = ({ document }) => {
       return;
     }
 
-    if (isSaving) return;
+    // Close dropdown to show modal properly
+    setIsDropdownOpen(false);
 
+    // Open Collection Modal instead of saving directly
+    setShowCollectionModal(true);
+  };
+
+  const handleSaveToCollection = async (collectionId) => {
+    if (isSaving) return;
     setIsSaving(true);
     try {
-      if (isSaved) {
-        await apiService.unsaveDocument(document._id);
-        setIsSaved(false);
-        toast.success("Document removed from saved");
-      } else {
-        await apiService.saveDocument(document._id);
-        setIsSaved(true);
-        toast.success("Document saved");
-      }
+      await apiService.saveDocument(document._id, collectionId);
+      setIsSaved(true);
+      setSavedCollectionId(collectionId);
+      toast.success(collectionId ? "Saved to collection" : "Document saved");
+      checkSavedStatus(); // Refresh status
     } catch (error) {
-      console.error("Error toggling save:", error);
-      toast.error("Failed to update save status");
+      toast.error("Failed to save document");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleUnsave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await apiService.unsaveDocument(document._id);
+      setIsSaved(false);
+      setSavedCollectionId(null);
+      toast.success("Document removed from saved");
+    } catch (error) {
+      console.error("Error removing document:", error);
+      toast.error("Failed to remove document");
     } finally {
       setIsSaving(false);
     }
@@ -264,7 +288,7 @@ export const DocumentCard = ({ document }) => {
                     <div className="dropdown-menu">
                       <DropdownItem
                         icon={isSaved ? BookmarkCheck : Bookmark}
-                        label={isSaved ? "Remove from saved" : "Save for later"}
+                        label={isSaved ? "Saved (Edit)" : "Save for later"}
                         onClick={handleSaveToggle}
                         disabled={isSaving}
                       />
@@ -332,6 +356,13 @@ export const DocumentCard = ({ document }) => {
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         document={document}
+      />
+      <CollectionModal
+        isOpen={showCollectionModal}
+        onClose={() => setShowCollectionModal(false)}
+        onSave={handleSaveToCollection}
+        onUnsave={isSaved ? handleUnsave : null}
+        savedCollectionId={savedCollectionId}
       />
     </>
   );

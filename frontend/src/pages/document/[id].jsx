@@ -23,6 +23,7 @@ import {
 import toast from "react-hot-toast";
 import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
+import { CollectionModal } from "../../components/common/CollectionModal";
 import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
 import axios from "axios";
 
@@ -108,36 +109,55 @@ const DocumentViewerPage = ({
     }
   };
 
+  const [showCollectionModal, setShowCollectionModal] = useState(false);
+  const [savedCollectionId, setSavedCollectionId] = useState(null);
+
   const checkSavedStatus = async () => {
     try {
       const response = await apiService.checkSavedStatus(id);
       setIsSaved(response.data.isSaved);
+      setSavedCollectionId(response.data.collectionId || null);
     } catch (error) {
       console.error("Error checking save status:", error);
     }
   };
 
-  const handleSaveToggle = async () => {
+  const handleSaveClick = () => {
     if (!user) {
       toast.error("Please login to save documents");
       return;
     }
-    if (isSaving) return;
+    setShowCollectionModal(true);
+  };
 
+  const handleSaveToCollection = async (collectionId) => {
+    if (isSaving) return;
     setIsSaving(true);
     try {
-      if (isSaved) {
-        await apiService.unsaveDocument(id);
-        setIsSaved(false);
-        toast.success("Document removed from saved");
-      } else {
-        await apiService.saveDocument(id);
-        setIsSaved(true);
-        toast.success("Document saved");
-      }
+      await apiService.saveDocument(id, collectionId);
+      setIsSaved(true);
+      setSavedCollectionId(collectionId);
+      toast.success(collectionId ? "Saved to collection" : "Document saved");
+      checkSavedStatus(); // Refresh status
     } catch (error) {
-      console.error("Error toggling save:", error);
-      toast.error("Failed to update save status");
+      console.error("Error saving document:", error);
+      toast.error("Failed to save document");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleUnsave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await apiService.unsaveDocument(id);
+      setIsSaved(false);
+      setSavedCollectionId(null);
+      toast.success("Document removed from saved");
+    } catch (error) {
+      console.error("Error removing document:", error);
+      toast.error("Failed to remove document");
     } finally {
       setIsSaving(false);
     }
@@ -444,7 +464,7 @@ const DocumentViewerPage = ({
                     </button>
                     <div className="grid grid-cols-2 gap-2">
                       <button
-                        onClick={handleSaveToggle}
+                        onClick={handleSaveClick}
                         disabled={isSaving}
                         className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm ${
                           isSaved
@@ -619,6 +639,13 @@ const DocumentViewerPage = ({
           </div>
         </div>
       </div>
+      <CollectionModal
+        isOpen={showCollectionModal}
+        onClose={() => setShowCollectionModal(false)}
+        onSave={handleSaveToCollection}
+        onUnsave={isSaved ? handleUnsave : null}
+        savedCollectionId={savedCollectionId}
+      />
       <Footer />
     </>
   );

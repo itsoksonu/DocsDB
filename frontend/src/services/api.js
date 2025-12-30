@@ -248,8 +248,22 @@ class APIService {
   }
 
   // document Save related endpoints
-  async saveDocument(documentId) {
-    const response = await this.client.post(`/documents/${documentId}/save`);
+  async saveDocument(documentId, collectionId = null) {
+    const response = await this.client.post(`/documents/${documentId}/save`, {
+      collectionId,
+    });
+    return response.data;
+  }
+
+  async getCollections() {
+    const response = await this.client.get("/documents/user/collections");
+    return response.data;
+  }
+
+  async createCollection(name) {
+    const response = await this.client.post("/documents/user/collections", {
+      name,
+    });
     return response.data;
   }
 
