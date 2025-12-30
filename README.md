@@ -85,7 +85,6 @@ S3_BUCKET_NAME=your-bucket-name
 
 # Security
 JWT_SECRET=your-jwt-secret
-JWT_EXPIRES_IN=7d
 JWT_REFRESH_SECRET=your-jwt-refresh-secret
 BCRYPT_SALT_ROUNDS=12
 
