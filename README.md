@@ -4,11 +4,16 @@ DocsDB is a comprehensive platform for sharing, discovering, and monetizing docu
 
 ## 🚀 Features
 
-- **Document Management**: Secure upload, storage, and retrieval of documents (PDF, DOCX, etc.).
-- **AI Integration**: AI-powered document analysis and features using Google GenAI, HuggingFace, and Groq.
+- **Document Management**: Secure upload, storage, and retrieval of documents (PDF, DOCX, etc.) with preview capabilities.
+- **Enhanced Collections**: Organize documents into Folder-like collections with custom covers and editing capabilities.
+- **Universal Reporting System**: Robust reporting mechanism for bugs and inappropriate content.
+- **AI Integration**: AI-powered document analysis and features using Google GenAI and Groq.
+- **Smart Feed**: "For You" trending feed with personalization (interactions, "Don't show again").
 - **Search & Discovery**: Advanced search capabilities with caching for performance.
+- **SEO Optimization**: Fully optimized with Server-Side Rendering (SSR), Sitemap, and Robots.txt transparency.
 - **Monetization**: Integration with Stripe for premium content and monetization.
 - **Authentication**: Secure user authentication with JWT and OAuth (Google).
+- **Security**: Advanced security with API rate limiting, VirusTotal scanning, and secure AWS S3 integrations.
 - **Responsive Design**: Modern UI built with Next.js and Tailwind CSS, fully responsive across devices.
 - **Performance**: Optimized with Redis caching and background job processing using Bull.
 
@@ -21,6 +26,8 @@ DocsDB is a comprehensive platform for sharing, discovering, and monetizing docu
 - **State Management**: React Hooks
 - **HTTP Client**: Axios
 - **PWA**: Progressive Web App support
+- **SEO**: `next-sitemap`
+- **Utilities**: `dom-to-image-more` (client-side)
 
 ### Backend
 
@@ -116,6 +123,8 @@ Create a `.env.local` file in the `frontend` directory:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-google-client-id
+NEXT_PUBLIC_GOOGLE_REDIRECT_URI=http://localhost:3000/auth/callback
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
 ## 🏃‍♂️ Running the Application
@@ -155,5 +164,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 This project is licensed under the MIT License.
-
-
