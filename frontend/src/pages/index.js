@@ -77,12 +77,17 @@ export default function Home() {
   ];
 
   const loadDocuments = async () => {
-    const storageKey = `docs_cache_${selectedCategory}`;
+    // If we're on "for-you" and user is not logged in, we are fetching trending
+    // which has a slightly different cache key structure potentially
+    const isTrending = selectedCategory === "for-you" && !user;
+    const storageKey = `docs_cache_${selectedCategory}_${
+      isTrending ? "trending" : "feed"
+    }`;
 
     try {
       const cachedData = sessionStorage.getItem(storageKey);
 
-      if(cachedData) {
+      if (cachedData) {
         const parsedData = JSON.parse(cachedData);
         setDocuments(parsedData);
         setLoading(false);
@@ -90,28 +95,38 @@ export default function Home() {
         setLoading(true);
       }
 
-      const params = {
-        limit: 42, 
-        category: selectedCategory === "for-you" ? null : selectedCategory,
-        sort: selectedCategory === "for-you" ? "relevant" : "newest",
-      };
+      let newDocs = [];
 
-      const response = await apiService.getFeed(params);
-      const { documents: newDocs } = response.data;
+      if (isTrending) {
+        // Fetch trending if not logged in and on "For You"
+        const response = await apiService.getTrending("week", 42);
+        // getTrending returns { success: true, data: [...] }
+        newDocs = response.data || [];
+      } else {
+        // meaningful params for normal feed
+        const params = {
+          limit: 42,
+          category: selectedCategory === "for-you" ? null : selectedCategory,
+          sort: selectedCategory === "for-you" ? "relevant" : "newest",
+        };
+
+        const response = await apiService.getFeed(params);
+        // getFeed returns { success: true, data: { documents: [...], ... } }
+        newDocs = response.data?.documents || [];
+      }
 
       if (JSON.stringify(newDocs) !== cachedData) {
         setDocuments(newDocs);
         sessionStorage.setItem(storageKey, JSON.stringify(newDocs));
       }
-
     } catch (error) {
+      console.error("Error loading documents:", error);
       const currentCache = sessionStorage.getItem(storageKey);
       if (!currentCache) {
         toast.error("Failed to load documents");
       } else {
         console.warn("Background fetch failed, using cached data");
       }
-      
     } finally {
       setLoading(false);
     }
@@ -119,7 +134,7 @@ export default function Home() {
 
   useEffect(() => {
     loadDocuments();
-  }, [selectedCategory]);
+  }, [selectedCategory, user]);
 
   const handleSearch = (query) => {
     const trimmed = query.trim();
@@ -376,7 +391,8 @@ export default function Home() {
             <p className="text-lg text-dark-200 mb-8 leading-relaxed">
               DocsDB is different because we combine the comprehensive
               collection of a digital library with the intuitive discovery of
-              modern platforms. Your required document is just a few clicks away.
+              modern platforms. Your required document is just a few clicks
+              away.
             </p>
           </div>
 

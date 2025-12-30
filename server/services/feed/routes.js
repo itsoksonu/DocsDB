@@ -385,10 +385,37 @@ router.get(
         }
       }
 
-      const trendingDocs = await getTrendingDocuments(
-        timeframe,
-        parseInt(limit)
-      );
+      let trendingDocs = await getTrendingDocuments(timeframe, parseInt(limit));
+
+      // Fallback: If we don't have enough trending documents, fill with all-time popular docs
+      if (trendingDocs.length < parseInt(limit)) {
+        const remaining = parseInt(limit) - trendingDocs.length;
+        const existingIds = trendingDocs.map((doc) => doc._id);
+
+        const fallbackDocs = await Document.find({
+          status: "processed",
+          visibility: "public",
+          _id: { $nin: existingIds },
+        })
+          .select("-metadata -embeddingsId")
+          .populate("userId", "name avatar")
+          .sort({ viewsCount: -1 }) // All-time popular
+          .limit(remaining)
+          .lean(); // Use lean to get POJOs similar to optimization in getTrendingDocuments
+
+        // Normalize fallback docs to match aggregation result structure if needed,
+        // but addSignedThumbnails handles both mongoose docs and POJOs.
+        // We just need to make sure the structure is compatible for the frontend.
+        // The aggregation returns flattened user fields in some cases, or lookup.
+        // Let's ensure consistency. getTrendingDocuments returns aggregate result.
+        // Document.find returns Mongoose documents.
+
+        // We'll map fallbackDocs to match the structure if necessary, or just rely on frontend handling both.
+        // Frontend expects: _id, generatedTitle, user: { name, avatar } etc.
+        // Mongoose populate gives user object properly.
+
+        trendingDocs = [...trendingDocs, ...fallbackDocs];
+      }
 
       const docsWithThumbnails = await addSignedThumbnails(trendingDocs);
 
@@ -722,11 +749,11 @@ async function getTrendingDocuments(timeframe, limit) {
         from: "users",
         localField: "userId",
         foreignField: "_id",
-        as: "user",
+        as: "userId", // Overwrite userId with populated data
       },
     },
     {
-      $unwind: "$user",
+      $unwind: "$userId",
     },
     {
       $project: {
@@ -740,9 +767,9 @@ async function getTrendingDocuments(timeframe, limit) {
         tags: 1,
         category: 1,
         createdAt: 1,
-        "user.name": 1,
-        "user.avatar": 1,
-        "user._id": 1,
+        "userId.name": 1,
+        "userId.avatar": 1,
+        "userId._id": 1,
         trendingScore: {
           $add: [
             { $multiply: ["$viewsCount", 1] },
