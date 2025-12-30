@@ -1,36 +1,37 @@
-import express from 'express';
-import { param, query, body, validationResult } from 'express-validator';
-import { authMiddleware } from '../middleware/auth.js';
-import { requireRole } from '../middleware/auth.js';
-import { rateLimitMiddleware } from '../middleware/rateLimit.js';
-import User from '../../shared/models/User.js';
-import Document from '../../shared/models/Document.js';
-import Payouts from '../../shared/models/Payouts.js';
-import Report from '../../shared/models/Report.js';
-import { 
+import express from "express";
+import { param, query, body, validationResult } from "express-validator";
+import { authMiddleware } from "../middleware/auth.js";
+import { requireRole } from "../middleware/auth.js";
+import { rateLimitMiddleware } from "../middleware/rateLimit.js";
+import User from "../../shared/models/User.js";
+import Document from "../../shared/models/Document.js";
+import Payouts from "../../shared/models/Payouts.js";
+import Report from "../../shared/models/Report.js";
+import {
   moderateContent,
   processReport,
   generateAdminStats,
   takeDownDocument,
-  restoreDocument
-} from '../../shared/utils/moderationEngine.js';
-import logger from '../../shared/utils/logger.js';
+  restoreDocument,
+} from "../../shared/utils/moderationEngine.js";
+import logger from "../../shared/utils/logger.js";
+import s3 from "../../shared/utils/s3.js";
 
 const router = express.Router();
 
 // Admin dashboard statistics
-router.get('/dashboard',
+router.get(
+  "/dashboard",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   async (req, res, next) => {
     try {
       const stats = await generateAdminStats();
 
       res.json({
         success: true,
-        data: stats
+        data: stats,
       });
-
     } catch (error) {
       next(error);
     }
@@ -38,14 +39,18 @@ router.get('/dashboard',
 );
 
 // Get moderation queue
-router.get('/moderation/queue',
+router.get(
+  "/moderation/queue",
   authMiddleware,
-  requireRole(['admin', 'moderator']),
+  requireRole(["admin", "moderator"]),
   [
-    query('status').optional().isIn(['pending', 'approved', 'rejected', 'escalated']).default('pending'),
-    query('type').optional().isIn(['upload', 'report', 'dmca']),
-    query('page').optional().isInt({ min: 1 }).default(1),
-    query('limit').optional().isInt({ min: 1, max: 100 }).default(50)
+    query("status")
+      .optional()
+      .isIn(["pending", "approved", "rejected", "escalated"])
+      .default("pending"),
+    query("type").optional().isIn(["upload", "report", "dmca"]),
+    query("page").optional().isInt({ min: 1 }).default(1),
+    query("limit").optional().isInt({ min: 1, max: 100 }).default(50),
   ],
   async (req, res, next) => {
     try {
@@ -53,8 +58,8 @@ router.get('/moderation/queue',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -68,13 +73,13 @@ router.get('/moderation/queue',
 
       const [queueItems, total] = await Promise.all([
         Report.find(query)
-          .populate('reporterId', 'name email')
-          .populate('documentId', 'generatedTitle fileType userId')
-          .populate('targetUserId', 'name email')
+          .populate("reporterId", "name email")
+          .populate("documentId", "generatedTitle fileType userId")
+          .populate("targetUserId", "name email")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(parseInt(limit)),
-        Report.countDocuments(query)
+        Report.countDocuments(query),
       ]);
 
       res.json({
@@ -85,11 +90,10 @@ router.get('/moderation/queue',
             page: parseInt(page),
             limit: parseInt(limit),
             total,
-            hasMore: (skip + queueItems.length) < total
-          }
-        }
+            hasMore: skip + queueItems.length < total,
+          },
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -97,14 +101,15 @@ router.get('/moderation/queue',
 );
 
 // Process moderation item
-router.post('/moderation/:reportId/process',
+router.post(
+  "/moderation/:reportId/process",
   authMiddleware,
-  requireRole(['admin', 'moderator']),
+  requireRole(["admin", "moderator"]),
   [
-    param('reportId').isMongoId(),
-    body('action').isIn(['approve', 'reject', 'escalate', 'request_more_info']),
-    body('reason').optional().trim().isLength({ max: 1000 }),
-    body('severity').optional().isIn(['low', 'medium', 'high', 'critical'])
+    param("reportId").isMongoId(),
+    body("action").isIn(["approve", "reject", "escalate", "request_more_info"]),
+    body("reason").optional().trim().isLength({ max: 1000 }),
+    body("severity").optional().isIn(["low", "medium", "high", "critical"]),
   ],
   async (req, res, next) => {
     try {
@@ -112,8 +117,8 @@ router.post('/moderation/:reportId/process',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -125,13 +130,13 @@ router.post('/moderation/:reportId/process',
         action,
         reason,
         severity,
-        moderatorId
+        moderatorId,
       });
 
       if (!result.success) {
         return res.status(400).json({
           success: false,
-          message: result.message
+          message: result.message,
         });
       }
 
@@ -140,10 +145,9 @@ router.post('/moderation/:reportId/process',
         message: `Report ${action}ed successfully`,
         data: {
           report: result.report,
-          actionsTaken: result.actionsTaken
-        }
+          actionsTaken: result.actionsTaken,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -151,13 +155,14 @@ router.post('/moderation/:reportId/process',
 );
 
 // Take down document (immediate action)
-router.post('/documents/:documentId/takedown',
+router.post(
+  "/documents/:documentId/takedown",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   [
-    param('documentId').isMongoId(),
-    body('reason').notEmpty().trim().isLength({ max: 500 }),
-    body('notifyUser').optional().isBoolean().default(true)
+    param("documentId").isMongoId(),
+    body("reason").notEmpty().trim().isLength({ max: 500 }),
+    body("notifyUser").optional().isBoolean().default(true),
   ],
   async (req, res, next) => {
     try {
@@ -165,8 +170,8 @@ router.post('/documents/:documentId/takedown',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -177,25 +182,24 @@ router.post('/documents/:documentId/takedown',
       const result = await takeDownDocument(documentId, {
         reason,
         notifyUser,
-        adminId
+        adminId,
       });
 
       if (!result.success) {
         return res.status(400).json({
           success: false,
-          message: result.message
+          message: result.message,
         });
       }
 
       res.json({
         success: true,
-        message: 'Document taken down successfully',
+        message: "Document taken down successfully",
         data: {
           document: result.document,
-          notificationSent: result.notificationSent
-        }
+          notificationSent: result.notificationSent,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -203,12 +207,13 @@ router.post('/documents/:documentId/takedown',
 );
 
 // Restore taken down document
-router.post('/documents/:documentId/restore',
+router.post(
+  "/documents/:documentId/restore",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   [
-    param('documentId').isMongoId(),
-    body('reason').optional().trim().isLength({ max: 500 })
+    param("documentId").isMongoId(),
+    body("reason").optional().trim().isLength({ max: 500 }),
   ],
   async (req, res, next) => {
     try {
@@ -216,8 +221,8 @@ router.post('/documents/:documentId/restore',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -227,24 +232,23 @@ router.post('/documents/:documentId/restore',
 
       const result = await restoreDocument(documentId, {
         reason,
-        adminId
+        adminId,
       });
 
       if (!result.success) {
         return res.status(400).json({
           success: false,
-          message: result.message
+          message: result.message,
         });
       }
 
       res.json({
         success: true,
-        message: 'Document restored successfully',
+        message: "Document restored successfully",
         data: {
-          document: result.document
-        }
+          document: result.document,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -252,15 +256,16 @@ router.post('/documents/:documentId/restore',
 );
 
 // User management
-router.get('/users',
+router.get(
+  "/users",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   [
-    query('page').optional().isInt({ min: 1 }).default(1),
-    query('limit').optional().isInt({ min: 1, max: 100 }).default(50),
-    query('search').optional().trim().isLength({ max: 100 }),
-    query('role').optional().isIn(['user', 'creator', 'moderator', 'admin']),
-    query('status').optional().isIn(['active', 'suspended', 'banned'])
+    query("page").optional().isInt({ min: 1 }).default(1),
+    query("limit").optional().isInt({ min: 1, max: 100 }).default(50),
+    query("search").optional().trim().isLength({ max: 100 }),
+    query("role").optional().isIn(["user", "creator", "moderator", "admin"]),
+    query("status").optional().isIn(["active", "suspended", "banned"]),
   ],
   async (req, res, next) => {
     try {
@@ -268,8 +273,8 @@ router.get('/users',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -282,33 +287,49 @@ router.get('/users',
 
       if (search) {
         query.$or = [
-          { name: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } }
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
         ];
       }
 
       const [users, total] = await Promise.all([
         User.find(query)
-          .select('-password')
+          .select("name email role status avatar createdAt")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(parseInt(limit)),
-        User.countDocuments(query)
+        User.countDocuments(query),
       ]);
+
+      const usersWithSignedAvatars = await Promise.all(
+        users.map(async (user) => {
+          const userObj = user.toObject();
+          if (userObj.avatar && !userObj.avatar.startsWith("http")) {
+            try {
+              userObj.avatar = await s3.generateViewUrl(userObj.avatar);
+            } catch (error) {
+              console.error(
+                `Error generating avatar URL for user ${user._id}:`,
+                error
+              );
+            }
+          }
+          return userObj;
+        })
+      );
 
       res.json({
         success: true,
         data: {
-          users,
+          users: usersWithSignedAvatars,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
             total,
-            hasMore: (skip + users.length) < total
-          }
-        }
+            hasMore: skip + users.length < total,
+          },
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -316,14 +337,15 @@ router.get('/users',
 );
 
 // Update user status
-router.patch('/users/:userId/status',
+router.patch(
+  "/users/:userId/status",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   [
-    param('userId').isMongoId(),
-    body('status').isIn(['active', 'suspended', 'banned']),
-    body('reason').optional().trim().isLength({ max: 500 }),
-    body('duration').optional().isInt({ min: 1, max: 365 }) // days
+    param("userId").isMongoId(),
+    body("status").isIn(["active", "suspended", "banned"]),
+    body("reason").optional().trim().isLength({ max: 500 }),
+    body("duration").optional().isInt({ min: 1, max: 365 }), // days
   ],
   async (req, res, next) => {
     try {
@@ -331,8 +353,8 @@ router.patch('/users/:userId/status',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -344,15 +366,17 @@ router.patch('/users/:userId/status',
       if (!user) {
         return res.status(404).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
       }
 
       user.status = status;
       user.statusReason = reason;
-      
-      if (status === 'suspended' && duration) {
-        user.suspendedUntil = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
+
+      if (status === "suspended" && duration) {
+        user.suspendedUntil = new Date(
+          Date.now() + duration * 24 * 60 * 60 * 1000
+        );
       } else {
         user.suspendedUntil = null;
       }
@@ -361,22 +385,21 @@ router.patch('/users/:userId/status',
 
       await logAdminAction({
         adminId,
-        action: 'UPDATE_USER_STATUS',
+        action: "UPDATE_USER_STATUS",
         targetUserId: userId,
         details: {
           previousStatus: user.status,
           newStatus: status,
           reason,
-          duration
-        }
+          duration,
+        },
       });
 
       res.json({
         success: true,
         message: `User status updated to ${status}`,
-        data: { user }
+        data: { user },
       });
-
     } catch (error) {
       next(error);
     }
@@ -384,36 +407,36 @@ router.patch('/users/:userId/status',
 );
 
 // Get user details for admin
-router.get('/users/:userId',
+router.get(
+  "/users/:userId",
   authMiddleware,
-  requireRole(['admin']),
-  [
-    param('userId').isMongoId()
-  ],
+  requireRole(["admin"]),
+  [param("userId").isMongoId()],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid user ID'
+          message: "Invalid user ID",
         });
       }
 
       const { userId } = req.params;
 
       const user = await User.findById(userId)
-        .select('-password')
+        .select("-password")
         .populate({
-          path: 'documents',
-          select: 'generatedTitle fileType status viewsCount downloadsCount createdAt',
-          options: { limit: 10, sort: { createdAt: -1 } }
+          path: "documents",
+          select:
+            "generatedTitle fileType status viewsCount downloadsCount createdAt",
+          options: { limit: 10, sort: { createdAt: -1 } },
         });
 
       if (!user) {
         return res.status(404).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
       }
 
@@ -423,10 +446,9 @@ router.get('/users/:userId',
         success: true,
         data: {
           user,
-          stats: userStats
-        }
+          stats: userStats,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -434,15 +456,25 @@ router.get('/users/:userId',
 );
 
 // Content management
-router.get('/documents',
+router.get(
+  "/documents",
   authMiddleware,
-  requireRole(['admin', 'moderator']),
+  requireRole(["admin", "moderator"]),
   [
-    query('page').optional().isInt({ min: 1 }).default(1),
-    query('limit').optional().isInt({ min: 1, max: 100 }).default(50),
-    query('status').optional().isIn(['uploaded', 'processing', 'processed', 'failed', 'rejected', 'taken_down']),
-    query('userId').optional().isMongoId(),
-    query('search').optional().trim().isLength({ max: 100 })
+    query("page").optional().isInt({ min: 1 }).default(1),
+    query("limit").optional().isInt({ min: 1, max: 100 }).default(50),
+    query("status")
+      .optional()
+      .isIn([
+        "uploaded",
+        "processing",
+        "processed",
+        "failed",
+        "rejected",
+        "taken_down",
+      ]),
+    query("userId").optional().isMongoId(),
+    query("search").optional().trim().isLength({ max: 100 }),
   ],
   async (req, res, next) => {
     try {
@@ -450,8 +482,8 @@ router.get('/documents',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -464,19 +496,19 @@ router.get('/documents',
 
       if (search) {
         query.$or = [
-          { generatedTitle: { $regex: search, $options: 'i' } },
-          { originalFilename: { $regex: search, $options: 'i' } },
-          { generatedDescription: { $regex: search, $options: 'i' } }
+          { generatedTitle: { $regex: search, $options: "i" } },
+          { originalFilename: { $regex: search, $options: "i" } },
+          { generatedDescription: { $regex: search, $options: "i" } },
         ];
       }
 
       const [documents, total] = await Promise.all([
         Document.find(query)
-          .populate('userId', 'name email')
+          .populate("userId", "name email")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(parseInt(limit)),
-        Document.countDocuments(query)
+        Document.countDocuments(query),
       ]);
 
       res.json({
@@ -487,11 +519,10 @@ router.get('/documents',
             page: parseInt(page),
             limit: parseInt(limit),
             total,
-            hasMore: (skip + documents.length) < total
-          }
-        }
+            hasMore: skip + documents.length < total,
+          },
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -499,18 +530,18 @@ router.get('/documents',
 );
 
 // System health and monitoring
-router.get('/system/health',
+router.get(
+  "/system/health",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   async (req, res, next) => {
     try {
       const health = await getSystemHealth();
 
       res.json({
         success: true,
-        data: health
+        data: health,
       });
-
     } catch (error) {
       next(error);
     }
@@ -518,11 +549,15 @@ router.get('/system/health',
 );
 
 // Payout management
-router.get('/payouts/overview',
+router.get(
+  "/payouts/overview",
   authMiddleware,
-  requireRole(['admin']),
+  requireRole(["admin"]),
   [
-    query('timeframe').optional().isIn(['today', 'week', 'month', 'year']).default('month')
+    query("timeframe")
+      .optional()
+      .isIn(["today", "week", "month", "year"])
+      .default("month"),
   ],
   async (req, res, next) => {
     try {
@@ -530,8 +565,8 @@ router.get('/payouts/overview',
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: 'Validation failed',
-          errors: errors.array()
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -541,9 +576,8 @@ router.get('/payouts/overview',
 
       res.json({
         success: true,
-        data: payoutStats
+        data: payoutStats,
       });
-
     } catch (error) {
       next(error);
     }
@@ -552,53 +586,56 @@ router.get('/payouts/overview',
 
 // Helper functions
 async function getUserStats(userId) {
-  const [documentsCount, totalViews, totalDownloads, totalEarnings] = await Promise.all([
-    Document.countDocuments({ userId }),
-    Document.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-      { $group: { _id: null, total: { $sum: '$viewsCount' } } }
-    ]),
-    Document.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-      { $group: { _id: null, total: { $sum: '$downloadsCount' } } }
-    ]),
-    Payouts.aggregate([
-      { 
-        $match: { 
-          userId: new mongoose.Types.ObjectId(userId),
-          status: { $in: ['completed', 'processing'] }
-        } 
-      },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ])
-  ]);
+  const [documentsCount, totalViews, totalDownloads, totalEarnings] =
+    await Promise.all([
+      Document.countDocuments({ userId }),
+      Document.aggregate([
+        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+        { $group: { _id: null, total: { $sum: "$viewsCount" } } },
+      ]),
+      Document.aggregate([
+        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+        { $group: { _id: null, total: { $sum: "$downloadsCount" } } },
+      ]),
+      Payouts.aggregate([
+        {
+          $match: {
+            userId: new mongoose.Types.ObjectId(userId),
+            status: { $in: ["completed", "processing"] },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+    ]);
 
   return {
     documentsCount,
     totalViews: totalViews[0]?.total || 0,
     totalDownloads: totalDownloads[0]?.total || 0,
     totalEarnings: totalEarnings[0]?.total || 0,
-    joined: (await User.findById(userId)).createdAt
+    joined: (await User.findById(userId)).createdAt,
   };
 }
 
 async function getSystemHealth() {
-  const [userCount, documentCount, pendingModeration, failedProcesses] = await Promise.all([
-    User.countDocuments(),
-    Document.countDocuments(),
-    Report.countDocuments({ status: 'pending' }),
-    Document.countDocuments({ status: 'failed' })
-  ]);
+  const [userCount, documentCount, pendingModeration, failedProcesses] =
+    await Promise.all([
+      User.countDocuments(),
+      Document.countDocuments(),
+      Report.countDocuments({ status: "pending" }),
+      Document.countDocuments({ status: "failed" }),
+    ]);
 
-  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  const dbStatus =
+    mongoose.connection.readyState === 1 ? "connected" : "disconnected";
 
-  let redisStatus = 'disconnected';
+  let redisStatus = "disconnected";
   if (redisClient) {
     try {
       await redisClient.ping();
-      redisStatus = 'connected';
+      redisStatus = "connected";
     } catch (error) {
-      redisStatus = 'error';
+      redisStatus = "error";
     }
   }
 
@@ -610,40 +647,41 @@ async function getSystemHealth() {
       totalUsers: userCount,
       totalDocuments: documentCount,
       pendingModeration,
-      failedProcesses
+      failedProcesses,
     },
-    timestamp: new Date()
+    timestamp: new Date(),
   };
 }
 
 async function getPayoutOverview(timeframe) {
   const timeFilter = getTimeFilter(timeframe);
 
-  const [totalPayouts, pendingPayouts, completedPayouts, payoutStats] = await Promise.all([
-    Payouts.aggregate([
-      { $match: { createdAt: timeFilter } },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]),
-    Payouts.countDocuments({ status: 'pending', createdAt: timeFilter }),
-    Payouts.countDocuments({ status: 'completed', createdAt: timeFilter }),
-    Payouts.aggregate([
-      { $match: { createdAt: timeFilter } },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-          totalAmount: { $sum: '$amount' }
-        }
-      }
-    ])
-  ]);
+  const [totalPayouts, pendingPayouts, completedPayouts, payoutStats] =
+    await Promise.all([
+      Payouts.aggregate([
+        { $match: { createdAt: timeFilter } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Payouts.countDocuments({ status: "pending", createdAt: timeFilter }),
+      Payouts.countDocuments({ status: "completed", createdAt: timeFilter }),
+      Payouts.aggregate([
+        { $match: { createdAt: timeFilter } },
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 },
+            totalAmount: { $sum: "$amount" },
+          },
+        },
+      ]),
+    ]);
 
   return {
     totalAmount: totalPayouts[0]?.total || 0,
     pendingCount: pendingPayouts,
     completedCount: completedPayouts,
     breakdown: payoutStats,
-    timeframe
+    timeframe,
   };
 }
 
@@ -652,16 +690,16 @@ function getTimeFilter(timeframe) {
   let startDate;
 
   switch (timeframe) {
-    case 'today':
+    case "today":
       startDate = new Date(now.setHours(0, 0, 0, 0));
       break;
-    case 'week':
+    case "week":
       startDate = new Date(now.setDate(now.getDate() - 7));
       break;
-    case 'month':
+    case "month":
       startDate = new Date(now.setMonth(now.getMonth() - 1));
       break;
-    case 'year':
+    case "year":
       startDate = new Date(now.setFullYear(now.getFullYear() - 1));
       break;
     default:
@@ -674,9 +712,9 @@ function getTimeFilter(timeframe) {
 async function logAdminAction(actionData) {
   try {
     // In production, this would log to a dedicated admin actions collection
-    logger.info('Admin action:', actionData);
+    logger.info("Admin action:", actionData);
   } catch (error) {
-    logger.error('Error logging admin action:', error);
+    logger.error("Error logging admin action:", error);
   }
 }
 

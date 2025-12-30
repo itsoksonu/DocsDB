@@ -328,6 +328,53 @@ class APIService {
     const response = await this.client.get(`/report/check/${documentId}`);
     return response.data;
   }
+
+  // Admin Endpoints
+  async getAdminStats() {
+    const response = await this.client.get("/admin/dashboard");
+    return response.data;
+  }
+
+  async getAdminUsers(params) {
+    const response = await this.client.get("/admin/users", { params });
+    return response.data;
+  }
+
+  async updateUserStatus(userId, data) {
+    const response = await this.client.patch(
+      `/admin/users/${userId}/status`,
+      data
+    );
+    return response.data;
+  }
+
+  async getAdminDocuments(params) {
+    const response = await this.client.get("/admin/documents", { params });
+    return response.data;
+  }
+
+  async takedownDocument(documentId, data) {
+    const response = await this.client.post(
+      `/admin/documents/${documentId}/takedown`,
+      data
+    );
+    return response.data;
+  }
+
+  async getModerationQueue(params) {
+    const response = await this.client.get("/admin/moderation/queue", {
+      params,
+    });
+    return response.data;
+  }
+
+  async processModerationItem(reportId, data) {
+    const response = await this.client.post(
+      `/admin/moderation/${reportId}/process`,
+      data
+    );
+    return response.data;
+  }
 }
 
 export const apiService = new APIService();
