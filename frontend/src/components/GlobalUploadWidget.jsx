@@ -254,7 +254,7 @@ export default function GlobalUploadWidget() {
     <div className="fixed top-20 left-4 right-4 md:left-auto md:right-6 md:w-96 bg-dark-900 border border-dark-700 rounded-xl shadow-2xl z-[9999] overflow-hidden animate-slide-in">
       {/* Header */}
       <div className="bg-dark-800 px-4 py-3 flex items-center justify-between border-b border-dark-700">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
             <FileText size={16} className="text-white" />
           </div>
@@ -267,7 +267,7 @@ export default function GlobalUploadWidget() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-shrink-0">
           <button
             onClick={() => setIsCollapsed(true)}
             className="p-1.5 hover:bg-dark-700 rounded-lg transition-colors"

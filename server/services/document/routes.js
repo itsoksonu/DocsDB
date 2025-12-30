@@ -106,7 +106,10 @@ router.get(
       const { page } = req.query;
       const userId = req.user?.userId;
 
-      const document = await Document.findById(id);
+      const document = await Document.findById(id).populate(
+        "userId",
+        "name avatar"
+      );
 
       if (!document) {
         return res.status(404).json({
@@ -144,15 +147,15 @@ router.get(
 
       const viewerData = await getViewerData(document, page);
 
+      const docObj = document.toObject();
+      if (docObj.userId && docObj.userId.avatar) {
+        docObj.userId.avatar = await s3.generateViewUrl(docObj.userId.avatar);
+      }
+
       res.json({
         success: true,
         data: {
-          document: {
-            id: document._id,
-            title: document.generatedTitle,
-            fileType: document.fileType,
-            pageCount: document.pageCount,
-          },
+          document: docObj,
           viewUrl: viewUrl || null,
           viewerData,
           expiresIn: 3600,
