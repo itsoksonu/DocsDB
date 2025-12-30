@@ -765,6 +765,75 @@ router.post("/user/collections", authMiddleware, async (req, res, next) => {
   }
 });
 
+// Update collection name
+router.put(
+  "/user/collections/:id",
+  authMiddleware,
+  [param("id").isMongoId()],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid collection ID" });
+      }
+
+      const { id } = req.params;
+      const { name } = req.body;
+
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "Collection name is required",
+        });
+      }
+
+      const userId = req.user.userId;
+      const User = mongoose.model("User");
+      const user = await User.findById(userId);
+
+      if (!user) {
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found" });
+      }
+
+      const collection = user.collections.id(id);
+      if (!collection) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Collection not found" });
+      }
+
+      // Check for duplicate names (excluding current collection)
+      const exists = user.collections.some(
+        (c) =>
+          c._id.toString() !== id &&
+          c.name.toLowerCase() === name.trim().toLowerCase()
+      );
+
+      if (exists) {
+        return res.status(400).json({
+          success: false,
+          message: "Collection with this name already exists",
+        });
+      }
+
+      collection.name = name.trim();
+      await user.save();
+
+      res.json({
+        success: true,
+        data: collection,
+        message: "Collection updated successfully",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 // Get user's saved documents
 router.get(
   "/user/saved-documents",

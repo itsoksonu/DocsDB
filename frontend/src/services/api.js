@@ -267,6 +267,16 @@ class APIService {
     return response.data;
   }
 
+  async updateCollection(collectionId, name) {
+    const response = await this.client.put(
+      `/documents/user/collections/${collectionId}`,
+      {
+        name,
+      }
+    );
+    return response.data;
+  }
+
   async unsaveDocument(documentId) {
     const response = await this.client.delete(`/documents/${documentId}/save`);
     return response.data;

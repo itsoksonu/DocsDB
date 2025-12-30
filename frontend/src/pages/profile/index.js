@@ -288,9 +288,103 @@ const ProfilePage = () => {
   const uploadedCount = stats.uploadedCount;
   const savedCount = stats.savedCount;
 
+  // Collection renaming state
+  const [editingCollection, setEditingCollection] = useState(null); // { id, name }
+  const [renameValue, setRenameValue] = useState("");
+  const [renameLoading, setRenameLoading] = useState(false);
+
+  const handleRenameClick = (e, collection) => {
+    e.stopPropagation();
+    setEditingCollection(collection);
+    setRenameValue(collection.name);
+  };
+
+  const handleRenameSubmit = async (e) => {
+    e.preventDefault();
+    if (!renameValue.trim()) return;
+
+    try {
+      setRenameLoading(true);
+      const response = await apiService.updateCollection(
+        editingCollection._id,
+        renameValue.trim()
+      );
+
+      // Update local state
+      setCollections((prev) =>
+        prev.map((c) =>
+          c._id === editingCollection._id
+            ? { ...c, name: renameValue.trim() }
+            : c
+        )
+      );
+
+      // Also update selected collection name if we are currently viewing it
+      if (selectedCollectionId === editingCollection._id) {
+        setSelectedCollectionName(renameValue.trim());
+      }
+
+      toast.success("Collection renamed successfully");
+      setEditingCollection(null);
+    } catch (error) {
+      console.error("Error renaming collection:", error);
+      toast.error(
+        error.response?.data?.message || "Failed to rename collection"
+      );
+    } finally {
+      setRenameLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-dark-950 text-white">
       <DesktopNavbar onUploadClick={handleUploadClick} />
+
+      {/* Rename Collection Modal */}
+      {editingCollection && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={() => setEditingCollection(null)}
+        >
+          <div
+            className="bg-dark-900 border border-dark-800 rounded-xl w-full max-w-sm overflow-hidden p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-white mb-4">
+              Rename Collection
+            </h3>
+            <form onSubmit={handleRenameSubmit}>
+              <input
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="w-full bg-dark-800 border border-dark-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500 transition-colors mb-4"
+                placeholder="Collection name"
+                autoFocus
+              />
+              <div className="flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setEditingCollection(null)}
+                  className="px-4 py-2 text-dark-300 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!renameValue.trim() || renameLoading}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2"
+                >
+                  {renameLoading && (
+                    <Loader2 size={16} className="animate-spin" />
+                  )}
+                  Save
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       <div className="pt-20 md:pt-24 max-w-6xl mx-auto px-2 md:px-4 pb-8">
         {/* Profile Header */}
@@ -515,6 +609,15 @@ const ProfilePage = () => {
 
                         {/* Content */}
                         <div className="relative z-10 flex flex-col items-center justify-center w-full h-full p-6">
+                          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                            <div
+                              onClick={(e) => handleRenameClick(e, collection)}
+                              className="p-2 bg-dark-900/80 hover:bg-dark-800 text-white rounded-lg backdrop-blur-sm transition-colors"
+                              title="Rename Collection"
+                            >
+                              <Edit size={14} />
+                            </div>
+                          </div>
                           <div className="p-3 bg-purple-500/20 backdrop-blur-sm rounded-full mb-3 shadow-lg">
                             <Bookmark size={24} className="text-purple-400" />
                           </div>
@@ -527,7 +630,16 @@ const ProfilePage = () => {
                         </div>
                       </>
                     ) : (
-                      <div className="flex flex-col items-center justify-center w-full h-full p-6">
+                      <div className="flex flex-col items-center justify-center w-full h-full p-6 relative">
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div
+                            onClick={(e) => handleRenameClick(e, collection)}
+                            className="p-2 bg-dark-700 hover:bg-dark-600 text-white rounded-lg transition-colors"
+                            title="Rename Collection"
+                          >
+                            <Edit size={14} />
+                          </div>
+                        </div>
                         <div className="p-4 bg-purple-500/10 rounded-full mb-3 group-hover:scale-110 transition-transform">
                           <Bookmark size={32} className="text-purple-500" />
                         </div>
