@@ -7,7 +7,8 @@ export default function Document() {
         <link rel="manifest" href="/manifest.json" />
         <link rel="apple-touch-icon" href="/icon-maskable-192.png" />
         <meta name="theme-color" content="#0a0a0a" />
-        
+        <meta name="google-site-verification" content="TzJw1R79UfH6l6p-cwlZ6WFRkor2PFxp2jiUaiGkGjM" />
+
         {/* Google Fonts */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
