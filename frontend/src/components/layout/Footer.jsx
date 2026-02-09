@@ -13,7 +13,7 @@ const Footer = () => {
           <div className="md:col-span-2">
             <div className="flex items-center justify-start gap-2 mb-4">
               <Logo />
-              <h3 className="text-2xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+              <h3 className="text-2xl font-bold">
                 DocsDB
               </h3>
             </div>

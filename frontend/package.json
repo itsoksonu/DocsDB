@@ -30,6 +30,7 @@
   "devDependencies": {
     "@netlify/plugin-nextjs": "^5.14.5",
     "autoprefixer": "^10.0.1",
+    "baseline-browser-mapping": "^2.9.19",
     "eslint": "8.52.0",
     "eslint-config-next": "14.0.0",
     "postcss": "^8.4.31",

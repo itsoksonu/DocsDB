@@ -107,7 +107,7 @@ const ShareCard = forwardRef(({ document }, ref) => {
             flexShrink: 0,
           }}
         >
-          {thumbnailUrl ? (
+          {thumbnailUrl && thumbnailUrl !== userId?.avatar ? (
             <img
               src={`/api/proxy-image?url=${encodeURIComponent(thumbnailUrl)}`}
               alt="Document Thumbnail"
@@ -228,7 +228,7 @@ const ShareCard = forwardRef(({ document }, ref) => {
             <>
               <img
                 src={`/api/proxy-image?url=${encodeURIComponent(
-                  userId.avatar
+                  userId.avatar,
                 )}`}
                 alt={authorName}
                 className="rounded-full border-2 border-gray-700 object-cover shadow-lg"
