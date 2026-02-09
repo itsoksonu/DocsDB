@@ -1,9 +1,72 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/router";
+import { useState, useEffect } from "react";
+import toast from "react-hot-toast";
+import { useAuth } from "../../contexts/AuthContext";
+import { useGoogleAuth } from "../../hooks/useGoogleAuth";
 import { Logo } from "../../icons";
 
 const Footer = () => {
+  const { user, handleGoogleOAuth } = useAuth();
+  const router = useRouter();
+  const { isGoogleLoaded, initializeGoogleOneTap, promptGoogleOneTap } =
+    useGoogleAuth();
+  const [signingIn, setSigningIn] = useState(false);
+
+  useEffect(() => {
+    if (!user && isGoogleLoaded) {
+      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+      if (clientId) {
+        initializeGoogleOneTap(clientId, handleGoogleResponse);
+      }
+    }
+  }, [user, isGoogleLoaded]);
+
+  const handleGoogleResponse = async (response) => {
+    setSigningIn(true);
+    try {
+      await handleGoogleOAuth(response);
+      toast.success("Signed in successfully!");
+      // After successful sign-in, redirect to upload if that was the intent
+      router.push("/upload");
+    } catch (error) {
+      console.error("Google sign-in failed:", error);
+      toast.error("Sign-in failed. Please try again.");
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    if (signingIn) return;
+
+    setSigningIn(true);
+
+    try {
+      if (isGoogleLoaded) {
+        promptGoogleOneTap(handleGoogleResponse);
+      } else {
+        toast.error("Sign-in service not ready. Please try again.");
+        setSigningIn(false);
+      }
+    } catch (error) {
+      console.error("Sign-in error:", error);
+      toast.error("Failed to initialize sign-in");
+      setSigningIn(false);
+    }
+  };
+
+  const handleUpload = (e) => {
+    e.preventDefault();
+    if (!user) {
+      handleSignIn();
+    } else {
+      router.push("/upload");
+    }
+  };
+
   return (
     <footer className="bg-dark-950 border-t border-dark-800 py-12">
       <div className="max-w-6xl mx-auto px-6">
@@ -13,9 +76,7 @@ const Footer = () => {
           <div className="md:col-span-2">
             <div className="flex items-center justify-start gap-2 mb-4">
               <Logo />
-              <h3 className="text-2xl font-bold">
-                DocsDB
-              </h3>
+              <h3 className="text-2xl font-bold">DocsDB</h3>
             </div>
 
             <p className="text-dark-300 max-w-md">
@@ -38,12 +99,12 @@ const Footer = () => {
                 </Link>
               </li>
               <li>
-                <Link
-                  href="/upload"
-                  className="hover:text-white transition-colors"
+                <button
+                  onClick={handleUpload}
+                  className="hover:text-white transition-colors text-left"
                 >
                   Upload Document
-                </Link>
+                </button>
               </li>
               <li>
                 <Link
