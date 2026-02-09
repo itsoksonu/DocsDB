@@ -17,7 +17,7 @@ const MAX_DOCS = 30;
 
 export default function Explore() {
   const router = useRouter();
-  
+
   const [categoriesData, setCategoriesData] = useState({});
   const [loadedCategories, setLoadedCategories] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -93,7 +93,7 @@ export default function Explore() {
           loadNextCategories();
         }
       },
-      { threshold: 0.5 }
+      { threshold: 0.5 },
     );
 
     if (categoryObserverRef.current) {
@@ -108,14 +108,16 @@ export default function Explore() {
 
     const nextCategories = categories.slice(
       loadedCategories,
-      loadedCategories + CATEGORIES_PER_LOAD
+      loadedCategories + CATEGORIES_PER_LOAD,
     );
 
     setLoading(loadedCategories === 0);
 
     try {
       await Promise.all(
-        nextCategories.map((category) => loadCategoryDocuments(category.id, 0))
+        nextCategories.map((category) =>
+          loadCategoryDocuments(category.id, null),
+        ),
       );
       setLoadedCategories((prev) => prev + nextCategories.length);
     } catch (error) {
@@ -125,30 +127,35 @@ export default function Explore() {
     }
   };
 
-  const loadCategoryDocuments = async (categoryId, offset) => {
+  const loadCategoryDocuments = async (categoryId, cursor = null) => {
     try {
       const response = await apiService.getFeed({
         limit: DOCS_PER_PAGE,
-        offset: offset,
+        cursor: cursor,
         category: categoryId,
         sort: "relevant",
       });
 
       const newDocs = response.data.documents || [];
+      const pagination = response.data.pagination || {};
 
       setCategoriesData((prev) => {
         const existingDocs = prev[categoryId]?.documents || [];
-        const existingIds = new Set(existingDocs.map(doc => doc._id));
-        
-        const uniqueNewDocs = newDocs.filter(doc => !existingIds.has(doc._id));
+        // Filter out duplicates just in case
+        const existingIds = new Set(existingDocs.map((doc) => doc._id));
+        const uniqueNewDocs = newDocs.filter(
+          (doc) => !existingIds.has(doc._id),
+        );
         const allDocs = [...existingDocs, ...uniqueNewDocs];
 
         return {
           ...prev,
           [categoryId]: {
             documents: allDocs,
-            hasMore: newDocs.length === DOCS_PER_PAGE && allDocs.length < MAX_DOCS,
-            offset: offset + DOCS_PER_PAGE,
+            hasMore:
+              pagination.hasMore ??
+              (newDocs.length === DOCS_PER_PAGE && allDocs.length < MAX_DOCS),
+            nextCursor: pagination.nextCursor,
           },
         };
       });
@@ -159,31 +166,32 @@ export default function Explore() {
         [categoryId]: {
           documents: prev[categoryId]?.documents || [],
           hasMore: false,
-          offset: offset,
+          nextCursor: null,
         },
       }));
     }
   };
 
-  const handleScroll = useCallback((categoryId) => {
-    const container = scrollRefs.current[categoryId];
-    if (!container) return;
+  const handleScroll = useCallback(
+    (categoryId) => {
+      const container = scrollRefs.current[categoryId];
+      if (!container) return;
 
-    const { scrollLeft, scrollWidth, clientWidth } = container;
-    const isNearEnd = scrollLeft + clientWidth >= scrollWidth - 200;
+      const { scrollLeft, scrollWidth, clientWidth } = container;
+      const isNearEnd = scrollLeft + clientWidth >= scrollWidth - 200;
 
-    const categoryData = categoriesData[categoryId];
-    if (
-      isNearEnd &&
-      categoryData?.hasMore &&
-      !categoryLoading[categoryId]
-    ) {
-      setCategoryLoading((prev) => ({ ...prev, [categoryId]: true }));
-      loadCategoryDocuments(categoryId, categoryData.offset).finally(() => {
-        setCategoryLoading((prev) => ({ ...prev, [categoryId]: false }));
-      });
-    }
-  }, [categoriesData, categoryLoading]);
+      const categoryData = categoriesData[categoryId];
+      if (isNearEnd && categoryData?.hasMore && !categoryLoading[categoryId]) {
+        setCategoryLoading((prev) => ({ ...prev, [categoryId]: true }));
+        loadCategoryDocuments(categoryId, categoryData.nextCursor).finally(
+          () => {
+            setCategoryLoading((prev) => ({ ...prev, [categoryId]: false }));
+          },
+        );
+      }
+    },
+    [categoriesData, categoryLoading],
+  );
 
   const handleSearch = (query) => {
     const trimmed = query.trim();
@@ -197,8 +205,8 @@ export default function Explore() {
     if (container) {
       const scrollAmount = 800;
       container.scrollBy({
-        left: direction === 'left' ? -scrollAmount : scrollAmount,
-        behavior: 'smooth'
+        left: direction === "left" ? -scrollAmount : scrollAmount,
+        behavior: "smooth",
       });
     }
   };
@@ -227,16 +235,27 @@ export default function Explore() {
                   Explore All Documents
                 </h1>
                 <p className="text-xl text-dark-300 max-w-2xl">
-                  Discover thousands of documents, research papers, and resources across all categories.
+                  Discover thousands of documents, research papers, and
+                  resources across all categories.
                 </p>
               </div>
-              
-              <Link 
+
+              <Link
                 href="/"
                 className="mt-4 md:mt-0 inline-flex items-center px-6 py-3 border border-dark-600 text-dark-300 rounded-lg hover:bg-dark-800 hover:text-white transition-all"
               >
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                <svg
+                  className="w-4 h-4 mr-2"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                  />
                 </svg>
                 Back to Home
               </Link>
@@ -271,9 +290,12 @@ export default function Explore() {
             ) : (
               <>
                 {visibleCategories.map((category) => {
-                  const categoryData = categoriesData[category.id] || { documents: [], hasMore: false };
+                  const categoryData = categoriesData[category.id] || {
+                    documents: [],
+                    hasMore: false,
+                  };
                   const documents = categoryData.documents;
-                  
+
                   return (
                     <div key={category.id} className="space-y-4">
                       {/* Category Header */}
@@ -295,15 +317,15 @@ export default function Explore() {
                         <div className="relative group">
                           {/* Scroll Buttons */}
                           <button
-                            onClick={() => scroll(category.id, 'left')}
+                            onClick={() => scroll(category.id, "left")}
                             className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-dark-900/90 hover:bg-dark-800 p-3 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
                             aria-label="Scroll left"
                           >
                             <ChevronLeft className="w-5 h-5" />
                           </button>
-                          
+
                           <button
-                            onClick={() => scroll(category.id, 'right')}
+                            onClick={() => scroll(category.id, "right")}
                             className="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-dark-900/90 hover:bg-dark-800 p-3 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
                             aria-label="Scroll right"
                           >
@@ -314,7 +336,10 @@ export default function Explore() {
                           <div
                             ref={(el) => (scrollRefs.current[category.id] = el)}
                             className="flex gap-6 overflow-x-auto scrollbar-hide scroll-smooth pb-4"
-                            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                            style={{
+                              scrollbarWidth: "none",
+                              msOverflowStyle: "none",
+                            }}
                             onScroll={() => handleScroll(category.id)}
                           >
                             {documents.map((doc) => (
@@ -322,12 +347,15 @@ export default function Explore() {
                                 <DocumentCard document={doc} />
                               </div>
                             ))}
-                            
+
                             {/* Loading indicator for more documents */}
                             {categoryLoading[category.id] && (
                               <>
                                 {Array.from({ length: 3 }).map((_, i) => (
-                                  <div key={`loading-${i}`} className="flex-shrink-0">
+                                  <div
+                                    key={`loading-${i}`}
+                                    className="flex-shrink-0"
+                                  >
                                     <DocumentSkeleton />
                                   </div>
                                 ))}
@@ -362,10 +390,7 @@ export default function Explore() {
 
                 {/* Observer target for loading more categories */}
                 {loadedCategories < categories.length && (
-                  <div
-                    ref={categoryObserverRef}
-                    className="space-y-4 py-8"
-                  >
+                  <div ref={categoryObserverRef} className="space-y-4 py-8">
                     {Array.from({ length: 2 }).map((_, i) => (
                       <div key={i} className="space-y-4">
                         <div className="h-8 w-48 bg-dark-800 rounded animate-pulse"></div>
