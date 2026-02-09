@@ -1,6 +1,6 @@
 import express from "express";
 import { query, validationResult } from "express-validator";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
 import databaseManager from "../../shared/database/connection.js";
@@ -105,7 +105,7 @@ async function addSignedThumbnails(documents) {
       }
 
       return doc;
-    })
+    }),
   );
 }
 
@@ -153,6 +153,7 @@ router.get("/sitemap-ids", async (req, res, next) => {
 router.get(
   "/",
   rateLimitMiddleware("search"),
+  optionalAuthMiddleware,
   feedValidation,
   async (req, res, next) => {
     try {
@@ -208,13 +209,14 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Search documents
 router.get(
   "/search",
   rateLimitMiddleware("search"),
+  optionalAuthMiddleware,
   [
     query("q").trim().notEmpty().isLength({ min: 1, max: 100 }),
     query("type").optional().isIn(["semantic", "keyword"]).default("keyword"),
@@ -316,7 +318,7 @@ router.get(
 
       if (searchResults.documents?.length > 0) {
         searchResults.documents = await addSignedThumbnails(
-          searchResults.documents
+          searchResults.documents,
         );
       }
 
@@ -331,12 +333,13 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get related documents
 router.get(
   "/related/:documentId",
+  optionalAuthMiddleware,
   [query("limit").optional().isInt({ min: 1, max: 20 }).default(10)],
   async (req, res, next) => {
     try {
@@ -345,7 +348,7 @@ router.get(
 
       const relatedDocs = await getRelatedDocuments(
         documentId,
-        parseInt(limit)
+        parseInt(limit),
       );
 
       const docsWithThumbnails = await addSignedThumbnails(relatedDocs);
@@ -357,12 +360,13 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get trending documents
 router.get(
   "/trending",
+  optionalAuthMiddleware,
   [
     query("timeframe")
       .optional()
@@ -423,7 +427,7 @@ router.get(
         await redisClient.setEx(
           cacheKey,
           900,
-          JSON.stringify(docsWithThumbnails)
+          JSON.stringify(docsWithThumbnails),
         );
       }
 
@@ -434,7 +438,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get categories with counts
@@ -527,7 +531,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Record user interaction (Don't show again / Show more like this)
@@ -557,7 +561,7 @@ router.post(
       await UserInteraction.findOneAndUpdate(
         { userId, documentId, type },
         { userId, documentId, type },
-        { upsert: true, new: true }
+        { upsert: true, new: true },
       );
 
       // Invalidate relevant redis caches
@@ -592,7 +596,7 @@ router.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Helper functions
