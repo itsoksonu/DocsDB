@@ -86,7 +86,7 @@ export default function SearchPage() {
         setLoadingMore(false);
       }
     },
-    [searchQuery, searchType, selectedCategory, page]
+    [searchQuery, searchType, selectedCategory, page],
   );
 
   const lastDocumentRef = useCallback(
@@ -97,12 +97,12 @@ export default function SearchPage() {
       observer.current = new IntersectionObserver(
         debounce((entries) => {
           if (entries[0].isIntersecting && hasMore) performSearch(false);
-        }, 300)
+        }, 300),
       );
 
       if (node) observer.current.observe(node);
     },
-    [loadingMore, hasMore, performSearch]
+    [loadingMore, hasMore, performSearch],
   );
 
   useEffect(() => {
@@ -301,8 +301,18 @@ export default function SearchPage() {
                   )}
 
                   {!hasMore && documents.length > 0 && (
-                    <div className="text-center py-12">
-                      <p className="text-dark-400">You've reached the end</p>
+                    <div className="w-full py-12 flex items-center justify-center relative">
+                      <div
+                        className="absolute inset-0 flex items-center"
+                        aria-hidden="true"
+                      >
+                        <div className="w-full border-t border-dark-800"></div>
+                      </div>
+                      <div className="relative flex justify-center">
+                        <span className="px-4 bg-dark-950 text-sm text-dark-400 uppercase tracking-widest font-medium">
+                          You've reached the end
+                        </span>
+                      </div>
                     </div>
                   )}
                 </>
@@ -339,8 +349,8 @@ export default function SearchPage() {
           )}
         </section>
       </div>
-         {/* Footer Section */}
-        <Footer />
+      {/* Footer Section */}
+      <Footer />
     </>
   );
 }
