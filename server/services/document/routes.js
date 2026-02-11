@@ -4,7 +4,7 @@ import mongoose from "mongoose";
 import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
-import { trackView } from "../../shared/utils/analytics.js";
+import { trackView, trackDownload } from "../../shared/utils/analytics.js";
 import databaseManager from "../../shared/database/connection.js";
 import S3Manager from "../../shared/utils/s3.js";
 import s3 from "../../shared/utils/s3.js";
@@ -27,7 +27,7 @@ async function addSignedThumbnails(documents) {
       }
 
       return doc;
-    })
+    }),
   );
 }
 
@@ -51,7 +51,7 @@ router.get(
 
       const document = await Document.findById(id).populate(
         "userId",
-        "name avatar"
+        "name avatar",
       );
 
       if (!document) {
@@ -84,7 +84,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get document content for viewing
@@ -108,7 +108,7 @@ router.get(
 
       const document = await Document.findById(id).populate(
         "userId",
-        "name avatar"
+        "name avatar",
       );
 
       if (!document) {
@@ -135,7 +135,7 @@ router.get(
           viewUrl = await S3Manager.generateDownloadUrl(
             document.s3Path,
             document.originalFilename,
-            3600
+            3600,
           );
         }
       } catch (error) {
@@ -165,7 +165,7 @@ router.get(
       logger.error("Error in document view endpoint:", error);
       next(error);
     }
-  }
+  },
 );
 
 // Get user's documents
@@ -247,7 +247,38 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
+);
+
+// Track document download
+router.post(
+  "/:id/track-download",
+  optionalAuthMiddleware,
+  [param("id").isMongoId()],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid document ID",
+        });
+      }
+
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      // Track the download
+      const tracked = await trackDownload(id, userId, req.ip);
+
+      res.json({
+        success: true,
+        tracked,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
 );
 
 // Update document metadata
@@ -296,7 +327,7 @@ router.patch(
       const updatedDocument = await Document.findByIdAndUpdate(
         id,
         { $set: updateData },
-        { new: true, runValidators: true }
+        { new: true, runValidators: true },
       ).select("-metadata -embeddingsId");
 
       res.json({
@@ -307,7 +338,7 @@ router.patch(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Delete document
@@ -345,8 +376,8 @@ router.delete(
               (err) =>
                 logger.warn(
                   `Failed to delete thumbnail for document ${id}:`,
-                  err
-                )
+                  err,
+                ),
             );
           }
         }
@@ -365,7 +396,7 @@ router.delete(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get document analytics
@@ -421,7 +452,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Helper functions
@@ -561,7 +592,7 @@ router.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Unsave document
@@ -601,7 +632,7 @@ router.delete(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Check save status
@@ -633,7 +664,7 @@ router.get(
       }
 
       const savedDoc = user.savedDocuments.find(
-        (d) => d.documentId.toString() === id
+        (d) => d.documentId.toString() === id,
       );
       const isSaved = !!savedDoc;
       const collectionId = savedDoc ? savedDoc.collectionId : null;
@@ -645,7 +676,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get user collections
@@ -685,19 +716,19 @@ router.get("/user/collections", authMiddleware, async (req, res, next) => {
         // Find latest document with a thumbnail
         // Sort by savedAt descending
         collectionDocs.sort(
-          (a, b) => new Date(b.savedAt) - new Date(a.savedAt)
+          (a, b) => new Date(b.savedAt) - new Date(a.savedAt),
         );
 
         for (const doc of collectionDocs) {
           if (doc.documentId.thumbnailS3Path) {
             try {
               thumbnailUrl = await s3.generateViewUrl(
-                doc.documentId.thumbnailS3Path
+                doc.documentId.thumbnailS3Path,
               );
               if (thumbnailUrl) break; // Found one, stop looking
             } catch (err) {
               logger.error(
-                `Error generating thumbnail for collection preview: ${err}`
+                `Error generating thumbnail for collection preview: ${err}`,
               );
             }
           }
@@ -708,7 +739,7 @@ router.get("/user/collections", authMiddleware, async (req, res, next) => {
           documentCount: count,
           thumbnailUrl,
         };
-      })
+      }),
     );
 
     res.json({
@@ -743,7 +774,7 @@ router.post("/user/collections", authMiddleware, async (req, res, next) => {
 
     // Check if collection already exists
     const exists = user.collections.some(
-      (c) => c.name.toLowerCase() === name.trim().toLowerCase()
+      (c) => c.name.toLowerCase() === name.trim().toLowerCase(),
     );
 
     if (exists) {
@@ -813,7 +844,7 @@ router.put(
       const exists = user.collections.some(
         (c) =>
           c._id.toString() !== id &&
-          c.name.toLowerCase() === name.trim().toLowerCase()
+          c.name.toLowerCase() === name.trim().toLowerCase(),
       );
 
       if (exists) {
@@ -834,7 +865,7 @@ router.put(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get user's saved documents
@@ -886,7 +917,7 @@ router.get(
           valid = valid.filter((d) => !d.collectionId);
         } else {
           valid = valid.filter(
-            (d) => d.collectionId && d.collectionId.toString() === collectionId
+            (d) => d.collectionId && d.collectionId.toString() === collectionId,
           );
         }
       }
@@ -897,7 +928,7 @@ router.get(
         valid = valid.filter(
           (d) =>
             searchRegex.test(d.documentId.generatedTitle) ||
-            searchRegex.test(d.documentId.originalFilename)
+            searchRegex.test(d.documentId.originalFilename),
         );
       }
 
@@ -932,7 +963,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get user stats

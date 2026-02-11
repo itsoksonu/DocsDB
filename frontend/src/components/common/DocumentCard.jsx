@@ -121,10 +121,14 @@ export const DocumentCard = ({ document }) => {
 
     try {
       const response = await apiService.client.get(
-        `/documents/${document._id}/view`
+        `/documents/${document._id}/view`,
       );
       const viewUrl = response.data.data.viewUrl;
       window.open(viewUrl, "_blank");
+
+      // Track download
+      await apiService.trackDownload(document._id);
+
       toast.success("Download started");
     } catch (error) {
       console.error("Error downloading:", error);

@@ -24,6 +24,7 @@ import toast from "react-hot-toast";
 import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
 import { CollectionModal } from "../../components/common/CollectionModal";
+import { ShareModal } from "../../components/common/ShareModal";
 import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
 import axios from "axios";
 
@@ -110,6 +111,7 @@ const DocumentViewerPage = ({
   };
 
   const [showCollectionModal, setShowCollectionModal] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [savedCollectionId, setSavedCollectionId] = useState(null);
 
   const checkSavedStatus = async () => {
@@ -163,35 +165,21 @@ const DocumentViewerPage = ({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (viewUrl) {
       window.open(viewUrl, "_blank");
-      toast.success("Download started");
-    }
-  };
 
-  const handleShare = async () => {
-    const shareUrl = window.location.href;
-    if (navigator.share) {
       try {
-        await navigator.share({
-          title: document.generatedTitle,
-          text: document.generatedDescription,
-          url: shareUrl,
-        });
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          copyToClipboard(shareUrl);
-        }
+        await apiService.trackDownload(id);
+        toast.success("Download started");
+      } catch (error) {
+        console.error("Error tracking download:", error);
       }
-    } else {
-      copyToClipboard(shareUrl);
     }
   };
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    toast.success("Link copied to clipboard");
+  const handleShare = () => {
+    setIsShareModalOpen(true);
   };
 
   const formatDate = (date) => {
@@ -645,6 +633,11 @@ const DocumentViewerPage = ({
         onSave={handleSaveToCollection}
         onUnsave={isSaved ? handleUnsave : null}
         savedCollectionId={savedCollectionId}
+      />
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        document={document}
       />
       <Footer />
     </>

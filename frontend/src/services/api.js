@@ -27,7 +27,7 @@ class APIService {
         }
         return config;
       },
-      (error) => Promise.reject(error)
+      (error) => Promise.reject(error),
     );
 
     this.client.interceptors.response.use(
@@ -90,7 +90,7 @@ class APIService {
           } catch (refreshError) {
             console.error(
               "API interceptor: Token refresh failed",
-              refreshError
+              refreshError,
             );
 
             // Process queued requests with error
@@ -120,7 +120,7 @@ class APIService {
         }
 
         return Promise.reject(error);
-      }
+      },
     );
   }
 
@@ -272,7 +272,7 @@ class APIService {
       `/documents/user/collections/${collectionId}`,
       {
         name,
-      }
+      },
     );
     return response.data;
   }
@@ -291,13 +291,20 @@ class APIService {
 
   async checkSavedStatus(documentId) {
     const response = await this.client.get(
-      `/documents/${documentId}/save/status`
+      `/documents/${documentId}/save/status`,
     );
     return response.data;
   }
 
   async deleteDocument(documentId) {
     const response = await this.client.delete(`/documents/${documentId}`);
+    return response.data;
+  }
+
+  async trackDownload(documentId) {
+    const response = await this.client.post(
+      `/documents/${documentId}/track-download`,
+    );
     return response.data;
   }
 
@@ -343,7 +350,7 @@ class APIService {
   async updateUserStatus(userId, data) {
     const response = await this.client.patch(
       `/admin/users/${userId}/status`,
-      data
+      data,
     );
     return response.data;
   }
@@ -356,7 +363,7 @@ class APIService {
   async takedownDocument(documentId, data) {
     const response = await this.client.post(
       `/admin/documents/${documentId}/takedown`,
-      data
+      data,
     );
     return response.data;
   }
@@ -371,7 +378,7 @@ class APIService {
   async processModerationItem(reportId, data) {
     const response = await this.client.post(
       `/admin/moderation/${reportId}/process`,
-      data
+      data,
     );
     return response.data;
   }
