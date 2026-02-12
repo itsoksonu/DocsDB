@@ -35,7 +35,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get moderation queue
@@ -97,7 +97,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Process moderation item
@@ -151,7 +151,7 @@ router.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Take down document (immediate action)
@@ -203,7 +203,7 @@ router.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Restore taken down document
@@ -252,7 +252,7 @@ router.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // User management
@@ -310,12 +310,12 @@ router.get(
             } catch (error) {
               console.error(
                 `Error generating avatar URL for user ${user._id}:`,
-                error
+                error,
               );
             }
           }
           return userObj;
-        })
+        }),
       );
 
       res.json({
@@ -333,7 +333,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Update user status
@@ -375,7 +375,7 @@ router.patch(
 
       if (status === "suspended" && duration) {
         user.suspendedUntil = new Date(
-          Date.now() + duration * 24 * 60 * 60 * 1000
+          Date.now() + duration * 24 * 60 * 60 * 1000,
         );
       } else {
         user.suspendedUntil = null;
@@ -403,7 +403,7 @@ router.patch(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Get user details for admin
@@ -452,7 +452,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Content management
@@ -526,7 +526,161 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
+);
+
+// Update document metadata (admin only)
+router.patch(
+  "/documents/:documentId",
+  authMiddleware,
+  requireRole(["admin"]),
+  [
+    param("documentId").isMongoId(),
+    body("generatedTitle")
+      .optional()
+      .trim()
+      .notEmpty()
+      .isLength({ max: 255 })
+      .withMessage("Title must not exceed 255 characters"),
+    body("generatedDescription")
+      .optional()
+      .trim()
+      .isLength({ max: 500 })
+      .withMessage("Description must not exceed 500 characters"),
+    body("tags").optional().isArray().withMessage("Tags must be an array"),
+    body("tags.*")
+      .optional()
+      .trim()
+      .isString()
+      .withMessage("Each tag must be a string"),
+    body("category")
+      .optional()
+      .isIn([
+        "for-you",
+        "technology",
+        "business",
+        "education",
+        "health",
+        "entertainment",
+        "sports",
+        "finance-money-management",
+        "games-activities",
+        "comics",
+        "philosophy",
+        "career-growth",
+        "politics",
+        "biography-memoir",
+        "study-aids-test-prep",
+        "law",
+        "art",
+        "science",
+        "history",
+        "erotica",
+        "lifestyle",
+        "religion-spirituality",
+        "self-improvement",
+        "language-arts",
+        "cooking-food-wine",
+        "true-crime",
+        "sheet-music",
+        "fiction",
+        "non-fiction",
+        "science-fiction",
+        "fantasy",
+        "romance",
+        "thriller-suspense",
+        "horror",
+        "poetry",
+        "graphic-novels",
+        "young-adult",
+        "children",
+        "parenting-family",
+        "marketing-sales",
+        "psychology",
+        "social-sciences",
+        "engineering",
+        "mathematics",
+        "data-science",
+        "nature-environment",
+        "travel",
+        "reference",
+        "design",
+        "news-media",
+        "professional-development",
+        "other",
+      ])
+      .withMessage("Invalid category"),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: errors.array(),
+        });
+      }
+
+      const { documentId } = req.params;
+      const { generatedTitle, generatedDescription, tags, category } = req.body;
+      const adminId = req.user.userId;
+
+      const document = await Document.findById(documentId);
+      if (!document) {
+        return res.status(404).json({
+          success: false,
+          message: "Document not found",
+        });
+      }
+
+      // Build update object with only provided fields
+      const updateData = {};
+      if (generatedTitle !== undefined) {
+        updateData.generatedTitle = generatedTitle;
+      }
+      if (generatedDescription !== undefined) {
+        updateData.generatedDescription = generatedDescription;
+      }
+      if (tags !== undefined) {
+        // Normalize tags: trim, lowercase
+        updateData.tags = tags
+          .map((tag) => tag.trim().toLowerCase())
+          .filter((tag) => tag.length > 0);
+      }
+      if (category !== undefined) {
+        updateData.category = category;
+      }
+
+      // Update document
+      const updatedDocument = await Document.findByIdAndUpdate(
+        documentId,
+        { $set: updateData },
+        { new: true, runValidators: true },
+      ).populate("userId", "name email");
+
+      // Log admin action
+      await logAdminAction({
+        adminId,
+        action: "UPDATE_DOCUMENT_METADATA",
+        targetDocumentId: documentId,
+        details: {
+          updatedFields: Object.keys(updateData),
+          updates: updateData,
+        },
+      });
+
+      res.json({
+        success: true,
+        message: "Document updated successfully",
+        data: {
+          document: updatedDocument,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
 );
 
 // System health and monitoring
@@ -545,7 +699,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Payout management
@@ -581,7 +735,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 // Helper functions

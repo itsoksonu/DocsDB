@@ -382,6 +382,14 @@ class APIService {
     );
     return response.data;
   }
+
+  async updateAdminDocument(documentId, data) {
+    const response = await this.client.patch(
+      `/admin/documents/${documentId}`,
+      data,
+    );
+    return response.data;
+  }
 }
 
 export const apiService = new APIService();

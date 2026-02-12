@@ -127,6 +127,11 @@ router.get(
         });
       }
 
+      // Track view
+      trackView(document._id, userId, req.ip).catch((error) => {
+        logger.error("Error tracking view:", error);
+      });
+
       let viewUrl;
       try {
         viewUrl = await s3.generateViewUrl(document.s3Path);

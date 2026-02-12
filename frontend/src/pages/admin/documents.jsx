@@ -9,6 +9,7 @@ import {
   Trash2,
   Eye,
   ShieldAlert,
+  Edit,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { format } from "date-fns";
@@ -21,6 +22,8 @@ export default function DocumentManagement() {
   const [pagination, setPagination] = useState(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [editingDocument, setEditingDocument] = useState(null);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   useEffect(() => {
     fetchDocuments();
@@ -70,6 +73,24 @@ export default function DocumentManagement() {
     } catch (error) {
       console.error("Error taking down document:", error);
       toast.error("Failed to take down document");
+    }
+  };
+
+  const handleEdit = (document) => {
+    setEditingDocument(document);
+    setShowEditModal(true);
+  };
+
+  const handleUpdateDocument = async (documentId, updatedData) => {
+    try {
+      await apiService.updateAdminDocument(documentId, updatedData);
+      toast.success("Document updated successfully");
+      setShowEditModal(false);
+      setEditingDocument(null);
+      fetchDocuments();
+    } catch (error) {
+      console.error("Error updating document:", error);
+      toast.error(error.response?.data?.message || "Failed to update document");
     }
   };
 
@@ -189,8 +210,8 @@ export default function DocumentManagement() {
                             doc.status === "processed"
                               ? "bg-emerald-500/10 text-emerald-400"
                               : doc.status === "taken_down"
-                              ? "bg-red-500/10 text-red-400"
-                              : "bg-blue-500/10 text-blue-400"
+                                ? "bg-red-500/10 text-red-400"
+                                : "bg-blue-500/10 text-blue-400"
                           }`}
                         >
                           {doc.status.replace("_", " ")}
@@ -215,6 +236,13 @@ export default function DocumentManagement() {
                           >
                             <ExternalLink size={18} />
                           </Link>
+                          <button
+                            onClick={() => handleEdit(doc)}
+                            className="p-2 text-dark-400 hover:text-emerald-400 hover:bg-emerald-400/10 rounded-lg transition-colors"
+                            title="Edit Document"
+                          >
+                            <Edit size={18} />
+                          </button>
                           {doc.status !== "taken_down" && (
                             <button
                               onClick={() => handleTakedown(doc._id)}
@@ -271,6 +299,223 @@ export default function DocumentManagement() {
           )}
         </div>
       </div>
+
+      {/* Edit Document Modal */}
+      {showEditModal && editingDocument && (
+        <EditDocumentModal
+          document={editingDocument}
+          onClose={() => {
+            setShowEditModal(false);
+            setEditingDocument(null);
+          }}
+          onSave={handleUpdateDocument}
+        />
+      )}
     </AdminLayout>
   );
 }
+
+// EditDocumentModal Component
+const EditDocumentModal = ({ document, onClose, onSave }) => {
+  const [formData, setFormData] = useState({
+    generatedTitle: document.generatedTitle || "",
+    generatedDescription: document.generatedDescription || "",
+    tags: document.tags?.join(", ") || "",
+    category: document.category || "other",
+  });
+  const [saving, setSaving] = useState(false);
+
+  const categories = [
+    { value: "for-you", label: "For You" },
+    { value: "technology", label: "Technology" },
+    { value: "business", label: "Business" },
+    { value: "education", label: "Education" },
+    { value: "health", label: "Health" },
+    { value: "entertainment", label: "Entertainment" },
+    { value: "sports", label: "Sports" },
+    { value: "finance-money-management", label: "Finance & Money Management" },
+    { value: "games-activities", label: "Games & Activities" },
+    { value: "comics", label: "Comics" },
+    { value: "philosophy", label: "Philosophy" },
+    { value: "career-growth", label: "Career Growth" },
+    { value: "politics", label: "Politics" },
+    { value: "biography-memoir", label: "Biography & Memoir" },
+    { value: "study-aids-test-prep", label: "Study Aids & Test Prep" },
+    { value: "law", label: "Law" },
+    { value: "art", label: "Art" },
+    { value: "science", label: "Science" },
+    { value: "history", label: "History" },
+    { value: "erotica", label: "Erotica" },
+    { value: "lifestyle", label: "Lifestyle" },
+    { value: "religion-spirituality", label: "Religion & Spirituality" },
+    { value: "self-improvement", label: "Self Improvement" },
+    { value: "language-arts", label: "Language Arts" },
+    { value: "cooking-food-wine", label: "Cooking, Food & Wine" },
+    { value: "true-crime", label: "True Crime" },
+    { value: "sheet-music", label: "Sheet Music" },
+    { value: "fiction", label: "Fiction" },
+    { value: "non-fiction", label: "Non-Fiction" },
+    { value: "science-fiction", label: "Science Fiction" },
+    { value: "fantasy", label: "Fantasy" },
+    { value: "romance", label: "Romance" },
+    { value: "thriller-suspense", label: "Thriller & Suspense" },
+    { value: "horror", label: "Horror" },
+    { value: "poetry", label: "Poetry" },
+    { value: "graphic-novels", label: "Graphic Novels" },
+    { value: "young-adult", label: "Young Adult" },
+    { value: "children", label: "Children" },
+    { value: "parenting-family", label: "Parenting & Family" },
+    { value: "marketing-sales", label: "Marketing & Sales" },
+    { value: "psychology", label: "Psychology" },
+    { value: "social-sciences", label: "Social Sciences" },
+    { value: "engineering", label: "Engineering" },
+    { value: "mathematics", label: "Mathematics" },
+    { value: "data-science", label: "Data Science" },
+    { value: "nature-environment", label: "Nature & Environment" },
+    { value: "travel", label: "Travel" },
+    { value: "reference", label: "Reference" },
+    { value: "design", label: "Design" },
+    { value: "news-media", label: "News & Media" },
+    { value: "professional-development", label: "Professional Development" },
+    { value: "other", label: "Other" },
+  ];
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+
+    try {
+      const updateData = {
+        generatedTitle: formData.generatedTitle.trim(),
+        generatedDescription: formData.generatedDescription.trim(),
+        tags: formData.tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0),
+        category: formData.category,
+      };
+
+      await onSave(document._id, updateData);
+    } catch (error) {
+      console.error("Error in modal submit:", error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-dark-900 border border-dark-800 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-dark-900 border-b border-dark-800 px-6 py-4">
+          <h2 className="text-xl font-bold text-white">Edit Document</h2>
+          <p className="text-sm text-dark-400 mt-1">
+            Update metadata for {document.originalFilename}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Title */}
+          <div>
+            <label className="block text-sm font-medium text-dark-300 mb-2">
+              Title
+            </label>
+            <input
+              type="text"
+              value={formData.generatedTitle}
+              onChange={(e) =>
+                setFormData({ ...formData, generatedTitle: e.target.value })
+              }
+              maxLength={255}
+              className="w-full px-4 py-2 bg-dark-950 border border-dark-800 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              placeholder="Enter document title"
+            />
+            <p className="text-xs text-dark-500 mt-1">
+              {formData.generatedTitle.length}/255 characters
+            </p>
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-medium text-dark-300 mb-2">
+              Description
+            </label>
+            <textarea
+              value={formData.generatedDescription}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  generatedDescription: e.target.value,
+                })
+              }
+              maxLength={500}
+              rows={4}
+              className="w-full px-4 py-2 bg-dark-950 border border-dark-800 rounded-lg text-white focus:outline-none focus:border-blue-500 resize-none"
+              placeholder="Enter document description"
+            />
+            <p className="text-xs text-dark-500 mt-1">
+              {formData.generatedDescription.length}/500 characters
+            </p>
+          </div>
+
+          {/* Tags */}
+          <div>
+            <label className="block text-sm font-medium text-dark-300 mb-2">
+              Tags
+            </label>
+            <input
+              type="text"
+              value={formData.tags}
+              onChange={(e) =>
+                setFormData({ ...formData, tags: e.target.value })
+              }
+              className="w-full px-4 py-2 bg-dark-950 border border-dark-800 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              placeholder="Enter tags separated by commas (e.g., pdf, tutorial, guide)"
+            />
+            <p className="text-xs text-dark-500 mt-1">
+              Separate tags with commas
+            </p>
+          </div>
+
+          {/* Category */}
+          <div>
+            <label className="block text-sm font-medium text-dark-300 mb-2">
+              Category
+            </label>
+            <select
+              value={formData.category}
+              onChange={(e) =>
+                setFormData({ ...formData, category: e.target.value })
+              }
+              className="w-full px-4 py-2 bg-dark-950 border border-dark-800 rounded-lg text-white focus:outline-none focus:border-blue-500"
+            >
+              {categories.map((cat) => (
+                <option key={cat.value} value={cat.value}>
+                  {cat.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-800">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 bg-dark-800 text-dark-300 rounded-lg hover:bg-dark-700 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !formData.generatedTitle.trim()}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
