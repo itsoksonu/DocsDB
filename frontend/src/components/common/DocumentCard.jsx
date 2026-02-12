@@ -144,14 +144,19 @@ export const DocumentCard = ({ document }) => {
 
   const handleDelete = async () => {
     setIsDeleting(true);
+    setIsDeleteModalOpen(false);
+
+    // Optimistic UI: Hide the document immediately
+    setIsHidden(true);
+    toast.success("Document deleted successfully");
+
     try {
       await apiService.deleteDocument(document._id);
-      toast.success("Document deleted successfully");
-      setIsDeleteModalOpen(false);
-      // Refresh the page to update the list
-      router.replace(router.asPath);
+      // Document stays hidden on success
     } catch (error) {
       console.error("Error deleting document:", error);
+      // Revert optimistic update on error
+      setIsHidden(false);
       toast.error("Failed to delete document");
       setIsDeleting(false);
     }
