@@ -5,8 +5,7 @@ import Report from "../models/Report.js";
 import Payouts from "../models/Payouts.js";
 import databaseManager from "../database/connection.js";
 import logger from "./logger.js";
-
-const redisClient = databaseManager.getRedisClient();
+import s3 from "./s3.js";
 
 export async function moderateContent(documentId, options = {}) {
   try {
@@ -25,7 +24,7 @@ export async function moderateContent(documentId, options = {}) {
         targetUserId: document.userId,
         type: "inappropriate",
         reason: `AI moderation flagged content: ${moderationResult.reasons.join(
-          ", "
+          ", ",
         )}`,
         category: "upload",
         priority: moderationResult.severity === "high" ? "high" : "medium",
@@ -406,7 +405,7 @@ async function calculateModerationEfficiency() {
   const efficiencyScore = Math.min(
     100,
     resolutionRate * 0.7 +
-      Math.max(0, 100 - (avgResolutionHours / 24) * 100) * 0.3
+      Math.max(0, 100 - (avgResolutionHours / 24) * 100) * 0.3,
   );
 
   return {
@@ -417,12 +416,36 @@ async function calculateModerationEfficiency() {
 }
 
 async function getSystemHealth() {
+  let redisStatus = "unhealthy";
+  const redisClient = databaseManager.getRedisClient();
+
+  if (redisClient) {
+    try {
+      await redisClient.ping();
+      redisStatus = "healthy";
+    } catch (error) {
+      logger.error("Redis health check failed:", error);
+      redisStatus = "unhealthy";
+    }
+  }
+
+  // Check storage (S3) health
+  const storageStatus = (await s3.checkConnection()) ? "healthy" : "unhealthy";
+
+  // Check API health (Memory usage)
+  const memoryUsage = process.memoryUsage();
+  const heapUsedMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+  const apiStatus = heapUsedMB > 800 ? "degraded" : "healthy"; // Threshold: 800MB
+
   return {
     database: mongoose.connection.readyState === 1 ? "healthy" : "unhealthy",
-    redis: redisClient ? "healthy" : "unhealthy",
-    storage: "healthy", // Would check S3/cloud storage
-    api: "healthy",
+    redis: redisStatus,
+    storage: storageStatus,
+    api: apiStatus,
     lastChecked: new Date(),
+    details: {
+      memory: `${heapUsedMB}MB`,
+    },
   };
 }
 

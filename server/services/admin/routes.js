@@ -16,6 +16,7 @@ import {
 } from "../../shared/utils/moderationEngine.js";
 import logger from "../../shared/utils/logger.js";
 import s3 from "../../shared/utils/s3.js";
+import databaseManager from "../../shared/database/connection.js";
 
 const router = express.Router();
 
@@ -784,6 +785,7 @@ async function getSystemHealth() {
     mongoose.connection.readyState === 1 ? "connected" : "disconnected";
 
   let redisStatus = "disconnected";
+  const redisClient = databaseManager.getRedisClient();
   if (redisClient) {
     try {
       await redisClient.ping();

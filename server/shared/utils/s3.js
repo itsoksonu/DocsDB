@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  HeadBucketCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v4 as uuidv4 } from "uuid";
@@ -20,6 +21,19 @@ class S3Manager {
     });
 
     this.bucketName = process.env.S3_BUCKET_NAME;
+  }
+
+  async checkConnection() {
+    try {
+      const command = new HeadBucketCommand({
+        Bucket: this.bucketName,
+      });
+      await this.s3Client.send(command);
+      return true;
+    } catch (error) {
+      logger.error("S3 connection check failed:", error);
+      return false;
+    }
   }
 
   async generatePresignedUrl(key, fileType, fileSize) {

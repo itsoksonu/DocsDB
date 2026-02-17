@@ -116,6 +116,39 @@ export default function AdminDashboard() {
                 </span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-dark-800">
+                <span className="text-dark-400">Storage (S3)</span>
+                <span
+                  className={`px-2 py-1 rounded text-xs font-medium ${
+                    stats?.system?.storage === "healthy"
+                      ? "bg-emerald-500/10 text-emerald-400"
+                      : "bg-red-500/10 text-red-400"
+                  }`}
+                >
+                  {stats?.system?.storage || "Unknown"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-dark-800">
+                <div className="flex flex-col">
+                  <span className="text-dark-400">API Server</span>
+                  {stats?.system?.details?.memory && (
+                    <span className="text-xs text-dark-500">
+                      Mem: {stats.system.details.memory}
+                    </span>
+                  )}
+                </div>
+                <span
+                  className={`px-2 py-1 rounded text-xs font-medium ${
+                    stats?.system?.api === "healthy"
+                      ? "bg-emerald-500/10 text-emerald-400"
+                      : stats?.system?.api === "degraded"
+                        ? "bg-amber-500/10 text-amber-400"
+                        : "bg-red-500/10 text-red-400"
+                  }`}
+                >
+                  {stats?.system?.api || "Unknown"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-dark-800">
                 <span className="text-dark-400">Failed Processes</span>
                 <span className="text-white">
                   {stats?.failedProcesses || 0}
