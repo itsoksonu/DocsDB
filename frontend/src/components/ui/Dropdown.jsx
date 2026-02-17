@@ -104,7 +104,7 @@ export const Dropdown = ({
           ref={contentRef}
           {...getAnimationProps()}
           transition={{ duration: 0.2 }}
-          className="fixed w-52 rounded-2xl bg-dark-800 border border-dark-700 shadow-2xl z-[9999] overflow-hidden"
+          className="fixed w-56 md:w-64 rounded-2xl bg-dark-800 border border-dark-700 shadow-2xl z-[9999] overflow-hidden"
           style={{
             top:
               position.vertical === "top"
