@@ -19,7 +19,11 @@ const nextConfig = {
   images: {
     domains: ["docsdb-upload.amazonaws.com"],
   },
-
+  experimental: {
+    runtime: "nodejs",
+    esmExternals: false,
+  }
+    
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
   },
