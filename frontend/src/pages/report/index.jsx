@@ -71,7 +71,7 @@ const ReportCenter = () => {
 
         <div className="flex-1 pt-24 pb-12 px-4">
           <div className="max-w-4xl mx-auto">
-            <h1 className="text-3xl font-bold mb-2">Report Center</h1>
+            <h1 className="font-literature text-4xl font-bold mb-4">Report Center</h1>
             <p className="text-dark-300 mb-8">
               Keep DocsDB safe and working smoothly. What would you like to
               report?

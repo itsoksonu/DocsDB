@@ -6,7 +6,7 @@ import logger from "./logger.js";
 
 export async function generateFeed({
   userId,
-  cursor,
+  page = 1,
   limit = 20,
   category = null,
   sort = "newest",
@@ -36,19 +36,16 @@ export async function generateFeed({
 
     const totalDocs = await Document.countDocuments(baseQuery);
 
-    const fetchQuery = { ...baseQuery };
-
-    if (cursor) {
-      const cursorDoc = await Document.findById(cursor).select("createdAt");
-      if (cursorDoc) {
-        fetchQuery.createdAt = { $lt: cursorDoc.createdAt };
-      }
-    }
+    const skip = (page - 1) * limit;
 
     let sortOptions = {};
     switch (sort) {
       case "popular":
+      case "most_views":
         sortOptions = { viewsCount: -1, createdAt: -1 };
+        break;
+      case "most_downloads":
+        sortOptions = { downloadsCount: -1, createdAt: -1 };
         break;
       case "relevant":
         sortOptions = await getRelevanceSort(userId);
@@ -58,11 +55,12 @@ export async function generateFeed({
         sortOptions = { createdAt: -1 };
     }
 
-    const documents = await Document.find(fetchQuery)
+    const documents = await Document.find(baseQuery)
       .select("-metadata -embeddingsId")
       .populate("userId", "name avatar")
       .sort(sortOptions)
-      .limit(limit + 10);
+      .skip(skip)
+      .limit(limit);
 
     let feedDocuments = [...documents];
 
@@ -70,20 +68,13 @@ export async function generateFeed({
       feedDocuments = await injectAds(feedDocuments, userId);
     }
 
-    feedDocuments = feedDocuments.slice(0, limit);
-
-    const nextCursor =
-      feedDocuments.length > 0
-        ? feedDocuments[feedDocuments.length - 1]._id
-        : null;
-
     const userPrefs = await getUserPreferences(userId);
 
     return {
       documents: feedDocuments,
       pagination: {
-        hasMore: nextCursor !== null && feedDocuments.length >= limit,
-        nextCursor,
+        hasMore: skip + feedDocuments.length < totalDocs,
+        page,
         limit,
         totalReturned: feedDocuments.length,
         total: totalDocs,

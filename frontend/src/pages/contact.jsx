@@ -35,7 +35,7 @@ export default function Contact() {
 
         <main className="flex-grow pt-32 px-6 pb-16">
           <div className="max-w-4xl mx-auto">
-            <h1 className="text-4xl font-bold mb-8 bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+            <h1 className="font-literature text-4xl font-bold mb-8 bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
               Contact Us
             </h1>
 

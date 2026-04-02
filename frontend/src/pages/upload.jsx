@@ -240,7 +240,7 @@ export default function UploadPage() {
           <div className="max-w-3xl mx-auto">
             {/* Header */}
             <div className="text-center mb-12">
-              <h1 className="text-4xl font-bold mb-4">
+              <h1 className="font-literature text-5xl font-bold mb-4">
                 Contribute to the Collection
               </h1>
               <p className="text-dark-300 text-lg">

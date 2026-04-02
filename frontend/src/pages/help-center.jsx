@@ -152,7 +152,7 @@ export default function HelpCenter() {
         <main className="flex-grow pt-32 pb-16 px-6">
           {/* Hero Section */}
           <section className="text-center mb-16 max-w-4xl mx-auto">
-            <h1 className="text-4xl md:text-5xl font-bold mb-6 bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+            <h1 className="font-literature text-4xl md:text-5xl font-bold mb-6">
               How can we help you?
             </h1>
             <p className="text-dark-200 text-lg mb-8">

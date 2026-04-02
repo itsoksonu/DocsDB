@@ -20,7 +20,7 @@ const geminiAI = process.env.GEMINI_API_KEY
 
 // Input validation for feed queries
 const feedValidation = [
-  query("cursor").optional().isAlphanumeric(),
+  query("page").optional().isInt({ min: 1 }).default(1),
   query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
   query("category")
     .optional()
@@ -79,7 +79,7 @@ const feedValidation = [
     ]),
   query("sort")
     .optional()
-    .isIn(["newest", "popular", "relevant"])
+    .isIn(["newest", "popular", "relevant", "most_views", "most_downloads"])
     .default("newest"),
 ];
 
@@ -166,13 +166,11 @@ router.get(
         });
       }
 
-      const { cursor, limit, category, sort } = req.query;
+      const { limit, category, sort, page } = req.query;
 
       const userId = req.user?.userId || "public";
 
-      const cacheKey = `feed:${userId}:${category || "all"}:${sort}:${
-        cursor || "initial"
-      }:${limit}`;
+      const cacheKey = `feed:${userId}:${category || "all"}:${sort}:page${page || 1}:${limit}`;
 
       if (redisClient) {
         const cachedFeed = await redisClient.get(cacheKey);
@@ -187,7 +185,7 @@ router.get(
 
       const feedData = await generateFeed({
         userId,
-        cursor,
+        page: parseInt(page) || 1,
         limit: parseInt(limit),
         category,
         sort,
@@ -488,12 +486,10 @@ router.get(
         });
       }
 
-      const { cursor, limit, category, sort } = req.query;
+      const { limit, category, sort, page } = req.query;
       const userId = req.user.userId;
 
-      const cacheKey = `feed:personalized:${userId}:${
-        category || "all"
-      }:${sort}:${cursor || "initial"}:${limit}`;
+      const cacheKey = `feed:personalized:${userId}:${category || "all"}:${sort}:page${page || 1}:${limit}`;
 
       if (redisClient) {
         const cachedFeed = await redisClient.get(cacheKey);
@@ -508,7 +504,7 @@ router.get(
 
       const feedData = await generateFeed({
         userId,
-        cursor,
+        page: parseInt(page) || 1,
         limit: parseInt(limit),
         category,
         sort,
