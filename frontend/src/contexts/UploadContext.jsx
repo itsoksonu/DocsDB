@@ -3,36 +3,49 @@ import { createContext, useContext, useState } from "react";
 const UploadContext = createContext();
 
 export const UploadProvider = ({ children }) => {
-  const [uploadState, setUploadState] = useState({
-    isUploading: false,
-    file: null,
-    progress: 0,
-    status: "idle", // idle, uploading, processing, processed, error
-    processingStep: "",
-    documentId: null,
-    errorMessage: "",
-    isMinimized: false,
-  });
+  const [uploads, setUploads] = useState([]);
+  const [isMinimized, setIsMinimized] = useState(false);
 
-  const updateUploadState = (updates) => {
-    setUploadState((prev) => ({ ...prev, ...updates }));
-  };
-
-  const resetUploadState = () => {
-    setUploadState({
-      isUploading: false,
-      file: null,
+  const addFiles = (files) => {
+    const newUploads = Array.from(files).map((file) => ({
+      id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
       progress: 0,
       status: "idle",
       processingStep: "",
       documentId: null,
       errorMessage: "",
-      isMinimized: false,
-    });
+    }));
+    setUploads((prev) => [...prev, ...newUploads]);
+  };
+
+  const updateUpload = (id, updates) => {
+    setUploads((prev) =>
+      prev.map((u) => (u.id === id ? { ...u, ...updates } : u))
+    );
+  };
+
+  const removeUpload = (id) => {
+    setUploads((prev) => prev.filter((u) => u.id !== id));
+  };
+
+  const resetUploads = () => {
+    setUploads([]);
+    setIsMinimized(false);
   };
 
   return (
-    <UploadContext.Provider value={{ uploadState, updateUploadState, resetUploadState }}>
+    <UploadContext.Provider
+      value={{
+        uploads,
+        isMinimized,
+        setIsMinimized,
+        addFiles,
+        updateUpload,
+        removeUpload,
+        resetUploads,
+      }}
+    >
       {children}
     </UploadContext.Provider>
   );

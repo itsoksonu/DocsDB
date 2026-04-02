@@ -38,6 +38,9 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const geminiAI = GEMINI_API_KEY
   ? new GoogleGenAI({ apiKey: GEMINI_API_KEY })
   : null;
+const geminiEmbeddingAI = GEMINI_API_KEY
+  ? new GoogleGenAI({ apiKey: GEMINI_API_KEY, httpOptions: { apiVersion: "v1" } })
+  : null;
 const huggingface = HUGGINGFACE_TOKEN
   ? new HfInference(HUGGINGFACE_TOKEN)
   : null;
@@ -1629,7 +1632,7 @@ function estimatePageCount(content) {
 
 async function generateLocalEmbeddings(content, metadata) {
   try {
-    if (!geminiAI) {
+    if (!geminiEmbeddingAI) {
       logger.warn(
         "Skipping embedding generation: Gemini API key not configured"
       );
@@ -1646,7 +1649,7 @@ Category: ${metadata.category}
 Content:
 ${content.substring(0, 8000)}`.trim();
 
-    const result = await geminiAI.models.embedContent({
+    const result = await geminiEmbeddingAI.models.embedContent({
       model: "text-embedding-004",
       contents: textToEmbed,
     });

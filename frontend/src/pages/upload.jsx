@@ -23,67 +23,46 @@ export default function UploadPage() {
   const { user } = useAuth();
   const router = useRouter();
   const fileInputRef = useRef(null);
-  const { uploadState, updateUploadState, resetUploadState } = useUpload();
+  const { uploads, isMinimized, setIsMinimized, addFiles, updateUpload, removeUpload, resetUploads } = useUpload();
 
-  const [uploading, setUploading] = useState(false);
-
-  const selectedFile = uploadState.file;
-  const uploadProgress = uploadState.progress;
-  const uploadStatus = uploadState.status;
-  const documentId = uploadState.documentId;
-const errorMessage = uploadState.errorMessage;
-  const isMinimized = uploadState.isMinimized;
-
-  // Reset state if we return to this page and it's still showing "processed"
-  useEffect(() => {
-    if (uploadState.status === "processed") {
-      resetUploadState();
-    }
-  }, []);
+  const [isUploading, setIsUploading] = useState(false);
 
   const ALLOWED_TYPES = {
     "application/pdf": ".pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-      ".docx",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-      ".pptx",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-      ".xlsx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
     "text/csv": ".csv",
   };
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
+  const validateAndAddFiles = (files) => {
+    const valid = [];
+    for (const file of Array.from(files)) {
+      if (!Object.keys(ALLOWED_TYPES).includes(file.type)) {
+        toast.error(`${file.name}: Invalid file type. Use PDF, DOCX, PPTX, XLSX, or CSV.`);
+        continue;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`${file.name}: Exceeds 100MB limit.`);
+        continue;
+      }
+      valid.push(file);
+    }
+    if (valid.length > 0) addFiles(valid);
+  };
+
   const handleFileSelect = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    if (!Object.keys(ALLOWED_TYPES).includes(file.type)) {
-      toast.error(
-        "Invalid file type. Please upload PDF, DOCX, PPTX, XLSX, or CSV files."
-      );
-      return;
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error("File size exceeds 100MB limit.");
-      return;
-    }
-
-    updateUploadState({
-      file: file,
-      status: "idle",
-      errorMessage: "",
-      isMinimized: false,
-    });
+    if (!event.target.files?.length) return;
+    validateAndAddFiles(event.target.files);
+    event.target.value = "";
   };
 
   const handleDrop = (event) => {
     event.preventDefault();
-    const file = event.dataTransfer.files[0];
-    if (file) {
-      const fakeEvent = { target: { files: [file] } };
-      handleFileSelect(fakeEvent);
+    if (event.dataTransfer.files?.length) {
+      validateAndAddFiles(event.dataTransfer.files);
     }
   };
 
@@ -91,84 +70,54 @@ const errorMessage = uploadState.errorMessage;
     event.preventDefault();
   };
 
-  const removeFile = () => {
-    resetUploadState();
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
-  const uploadToS3 = async (presignedUrl, file) => {
+  const uploadToS3 = (presignedUrl, file, onProgress) => {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-
       xhr.upload.addEventListener("progress", (event) => {
         if (event.lengthComputable) {
-          const progress = Math.round((event.loaded / event.total) * 90);
-          updateUploadState({ progress });
+          onProgress(Math.round((event.loaded / event.total) * 90));
         }
       });
-
       xhr.addEventListener("load", () => {
-        if (xhr.status === 200) {
-          resolve();
-        } else {
-          reject(new Error("Upload failed"));
-        }
+        if (xhr.status === 200) resolve();
+        else reject(new Error("Upload failed"));
       });
-
-      xhr.addEventListener("error", () => {
-        reject(new Error("Upload failed"));
-      });
-
+      xhr.addEventListener("error", () => reject(new Error("Upload failed")));
       xhr.open("PUT", presignedUrl);
       xhr.setRequestHeader("Content-Type", file.type);
       xhr.send(file);
     });
   };
 
-  const handleUpload = async () => {
-    if (!selectedFile || !user) return;
-
-    setUploading(true);
-    updateUploadState({
-      status: "uploading",
-      progress: 0,
-      errorMessage: "",
-    });
-
+  const uploadFile = async (uploadItem) => {
+    const { id, file } = uploadItem;
+    updateUpload(id, { status: "uploading", progress: 0 });
     try {
       const presignResponse = await apiService.getPresignedUrl({
-        fileName: selectedFile.name,
-        fileType: selectedFile.type,
-        fileSize: selectedFile.size,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
       });
-
-      const { uploadUrl, documentId: docId, key } = presignResponse.data;
-      updateUploadState({ documentId: docId });
-
-      await uploadToS3(uploadUrl, selectedFile);
-
-      updateUploadState({
-        status: "processing",
-        processingStep: "virus-scan",
-      });
-
-      await apiService.completeUpload({
-        documentId: docId,
-        key: key,
-      });
+      const { uploadUrl, documentId, key } = presignResponse.data;
+      updateUpload(id, { documentId });
+      await uploadToS3(uploadUrl, file, (progress) => updateUpload(id, { progress }));
+      updateUpload(id, { status: "processing", processingStep: "virus-scan" });
+      await apiService.completeUpload({ documentId, key });
     } catch (error) {
-      console.error("Upload error:", error);
-      updateUploadState({
+      updateUpload(id, {
         status: "error",
-        errorMessage:
-          error.response?.data?.message || "Upload failed. Please try again.",
+        errorMessage: error.response?.data?.message || "Upload failed. Please try again.",
       });
-      toast.error(error.response?.data?.message || "Upload failed");
-    } finally {
-      setUploading(false);
+      toast.error(error.response?.data?.message || `${file.name} failed to upload`);
     }
+  };
+
+  const handleUploadAll = async () => {
+    const idleUploads = uploads.filter((u) => u.status === "idle");
+    if (idleUploads.length === 0) return;
+    setIsUploading(true);
+    await Promise.all(idleUploads.map(uploadFile));
+    setIsUploading(false);
   };
 
   const formatFileSize = (bytes) => {
@@ -178,6 +127,12 @@ const errorMessage = uploadState.errorMessage;
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
+
+  const hasActiveUploads = uploads.some(
+    (u) => u.status === "uploading" || u.status === "processing"
+  );
+  const allIdle = uploads.every((u) => u.status === "idle");
+  const showFileList = uploads.length > 0 && !isMinimized;
 
   return (
     <>
@@ -212,7 +167,7 @@ const errorMessage = uploadState.errorMessage;
 
             {/* Upload Card */}
             <div className="bg-dark-900 border border-dark-700 rounded-2xl p-8">
-              {!selectedFile || isMinimized ? (
+              {!showFileList ? (
                 // File Drop Zone
                 <div
                   onDrop={handleDrop}
@@ -226,13 +181,13 @@ const errorMessage = uploadState.errorMessage;
                     </div>
                     <div>
                       <h3 className="text-xl font-semibold mb-2">
-                        Drop your file here or click to browse
+                        Drop your files here or click to browse
                       </h3>
                       <p className="text-dark-400 mb-4">
                         Supported formats: PDF, DOCX, PPTX, XLSX, CSV
                       </p>
                       <p className="text-sm text-dark-500">
-                        Maximum file size: 100MB
+                        Multiple files supported · Maximum 100MB per file
                       </p>
                     </div>
                   </div>
@@ -241,134 +196,146 @@ const errorMessage = uploadState.errorMessage;
                     type="file"
                     className="hidden"
                     accept=".pdf,.docx,.pptx,.xlsx,.csv"
+                    multiple
                     onChange={handleFileSelect}
                   />
                 </div>
               ) : (
-                // Selected File Display
-                <div className="space-y-6">
-                  {/* File Info */}
-                  <div className="flex items-center gap-4 p-4 bg-dark-800 rounded-xl">
-                    <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <FileText size={24} className="text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-medium truncate">
-                        {selectedFile.name}
-                      </h4>
-                      <p className="text-sm text-dark-400">
-                        {formatFileSize(selectedFile.size)}
-                      </p>
-                    </div>
-                    {uploadStatus === "idle" && (
-                      <button
-                        onClick={removeFile}
-                        className="p-2 hover:bg-dark-700 rounded-lg transition-colors"
+                // File List
+                <div className="space-y-4">
+                  {/* File Items */}
+                  <div className="space-y-2">
+                    {uploads.map((u) => (
+                      <div
+                        key={u.id}
+                        className="flex flex-col gap-2 p-4 bg-dark-800 rounded-xl"
                       >
-                        <X size={20} className="text-dark-400" />
-                      </button>
-                    )}
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <FileText size={20} className="text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-medium truncate text-sm">
+                              {u.file.name}
+                            </h4>
+                            <p className="text-xs text-dark-400">
+                              {formatFileSize(u.file.size)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {u.status === "processed" && (
+                              <Check size={18} className="text-green-500" />
+                            )}
+                            {u.status === "error" && (
+                              <AlertCircle size={18} className="text-red-500" />
+                            )}
+                            {u.status === "idle" && (
+                              <button
+                                onClick={() => removeUpload(u.id)}
+                                className="p-1.5 hover:bg-dark-700 rounded-lg transition-colors"
+                              >
+                                <X size={16} className="text-dark-400" />
+                              </button>
+                            )}
+                            {(u.status === "uploading" || u.status === "processing") && (
+                              <span className="text-xs text-blue-400 font-medium w-8 text-right">
+                                {u.progress}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Per-file progress bar */}
+                        {(u.status === "uploading" || u.status === "processing") && (
+                          <div className="h-1.5 bg-dark-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 transition-all duration-300"
+                              style={{ width: `${u.progress}%` }}
+                            />
+                          </div>
+                        )}
+
+                        {u.status === "error" && (
+                          <p className="text-xs text-red-400">{u.errorMessage}</p>
+                        )}
+                      </div>
+                    ))}
                   </div>
 
-                  {/* Unified Progress Bar - uploading (0–90%) + processing (90–99%) */}
-                  {(uploadStatus === "uploading" ||
-                    uploadStatus === "processing") && (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-dark-300">
-                          {uploadStatus === "uploading"
-                            ? "Uploading..."
-                            : "Processing..."}
-                        </span>
-                        <span className="text-dark-400">{uploadProgress}%</span>
-                      </div>
-                      <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-500 transition-all duration-300"
-                          style={{ width: `${uploadProgress}%` }}
-                        />
-                      </div>
+                  {/* Add more files button (idle state only) */}
+                  {allIdle && (
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full py-2.5 border border-dashed border-dark-600 hover:border-blue-500 text-dark-400 hover:text-blue-400 rounded-xl text-sm transition-colors"
+                    >
+                      + Add more files
+                    </button>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.docx,.pptx,.xlsx,.csv"
+                    multiple
+                    onChange={handleFileSelect}
+                  />
 
-                      {/* Minimize Button */}
+                  {/* Minimize button (during active uploads) */}
+                  {hasActiveUploads && (
+                    <button
+                      onClick={() => setIsMinimized(true)}
+                      className="w-full py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Minimize2 size={18} />
+                      Minimize and continue browsing
+                    </button>
+                  )}
+
+                  {/* Action buttons (idle state) */}
+                  {allIdle && (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleUploadAll}
+                        disabled={isUploading}
+                        className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Upload {uploads.length > 1 ? `${uploads.length} Files` : "Document"}
+                      </button>
+                      <button
+                        onClick={resetUploads}
+                        className="px-6 py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Retry errored files */}
+                  {!hasActiveUploads && uploads.some((u) => u.status === "error") && (
+                    <div className="flex gap-3">
                       <button
                         onClick={() =>
-                          updateUploadState({ isMinimized: true })
+                          Promise.all(
+                            uploads
+                              .filter((u) => u.status === "error")
+                              .map((u) => {
+                                updateUpload(u.id, { status: "idle", errorMessage: "" });
+                                return Promise.resolve();
+                              })
+                          )
                         }
-                        className="w-full py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
+                        className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
                       >
-                        <Minimize2 size={18} />
-                        Minimize and continue browsing
+                        Retry Failed
+                      </button>
+                      <button
+                        onClick={resetUploads}
+                        className="px-6 py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors"
+                      >
+                        Clear All
                       </button>
                     </div>
                   )}
-
-                  {/* Success Status */}
-                  {uploadStatus === "processed" && (
-                    <div className="flex items-center gap-3 p-4 bg-green-900/20 border border-green-700 rounded-xl">
-                      <Check size={24} className="text-green-500" />
-                      <div>
-                        <p className="font-medium text-green-400">
-                          Processing complete!
-                        </p>
-                        <p className="text-sm text-dark-400">
-                          Redirecting to your profile...
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Error Status */}
-                  {uploadStatus === "error" && (
-                    <div className="flex items-start gap-3 p-4 bg-red-900/20 border border-red-700 rounded-xl">
-                      <AlertCircle
-                        size={24}
-                        className="text-red-500 flex-shrink-0 mt-0.5"
-                      />
-                      <div>
-                        <p className="font-medium text-red-400">
-                          Upload failed
-                        </p>
-                        <p className="text-sm text-dark-400">{errorMessage}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Action Buttons */}
-                  <div className="flex gap-3">
-                    {uploadStatus === "idle" && (
-                      <>
-                        <button
-                          onClick={handleUpload}
-                          disabled={uploading}
-                          className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Upload Document
-                        </button>
-                        <button
-                          onClick={removeFile}
-                          className="px-6 py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    )}
-                    {uploadStatus === "error" && (
-                      <>
-                        <button
-                          onClick={handleUpload}
-                          className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
-                        >
-                          Try Again
-                        </button>
-                        <button
-                          onClick={removeFile}
-                          className="px-6 py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors"
-                        >
-                          Choose Different File
-                        </button>
-                      </>
-                    )}
-                  </div>
                 </div>
               )}
             </div>
@@ -454,7 +421,6 @@ const errorMessage = uploadState.errorMessage;
           </div>
         </div>
       </div>
-      {/* Footer Section */}
       <Footer />
     </>
   );
