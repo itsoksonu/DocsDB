@@ -20,6 +20,12 @@ const nextConfig = {
     domains: ["docsdb-upload.amazonaws.com"],
   },
 
+// you may think that this experimental key is obsolete, and doesnt seem to do anything. and you would be correct. but when we remove this key for some reason the whole program crashes and we cant figure out why, so here it will stay.
+
+  experimental: {
+    runtime: "nodejs",
+    esmExternals: false,
+  },
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
   },
