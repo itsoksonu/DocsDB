@@ -388,12 +388,12 @@ async function performBasicFileValidation(s3Key) {
     };
   }
 
-  if (fileBuffer.length > 50 * 1024 * 1024) {
+  if (fileBuffer.length > 100 * 1024 * 1024) {
     return {
       clean: false,
       scanner: "basic-validation",
       scannedAt: new Date(),
-      details: "File exceeds 50MB limit",
+      details: "File exceeds 100MB limit",
       threat: "File too large",
     };
   }

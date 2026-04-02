@@ -14,10 +14,6 @@ import {
   Users,
   Code,
   Minimize2,
-  Shield,
-  FileSearch,
-  Sparkles,
-  Image as ImageIcon,
 } from "../icons";
 import { apiService } from "../services/api";
 import Footer from "../components/layout/Footer";
@@ -35,8 +31,7 @@ export default function UploadPage() {
   const uploadProgress = uploadState.progress;
   const uploadStatus = uploadState.status;
   const documentId = uploadState.documentId;
-  const processingStep = uploadState.processingStep;
-  const errorMessage = uploadState.errorMessage;
+const errorMessage = uploadState.errorMessage;
   const isMinimized = uploadState.isMinimized;
 
   // Reset state if we return to this page and it's still showing "processed"
@@ -58,37 +53,6 @@ export default function UploadPage() {
   };
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-
-  const getProcessingStepInfo = (step) => {
-    const steps = {
-      "virus-scan": {
-        icon: Shield,
-        label: "Running virus scan",
-        description: "Ensuring your document is safe",
-      },
-      "extracting-content": {
-        icon: FileSearch,
-        label: "Extracting content",
-        description: "Reading document text and data",
-      },
-      "generating-metadata": {
-        icon: Sparkles,
-        label: "Generating metadata",
-        description: "Creating title, description, and tags",
-      },
-      "creating-thumbnail": {
-        icon: ImageIcon,
-        label: "Creating thumbnail",
-        description: "Generating document preview",
-      },
-      finalizing: {
-        icon: Check,
-        label: "Finalizing",
-        description: "Almost done!",
-      },
-    };
-    return steps[step] || steps["finalizing"];
-  };
 
   const handleFileSelect = (event) => {
     const file = event.target.files[0];
@@ -140,7 +104,7 @@ export default function UploadPage() {
 
       xhr.upload.addEventListener("progress", (event) => {
         if (event.lengthComputable) {
-          const progress = Math.round((event.loaded / event.total) * 100);
+          const progress = Math.round((event.loaded / event.total) * 90);
           updateUploadState({ progress });
         }
       });
@@ -184,9 +148,6 @@ export default function UploadPage() {
       updateUploadState({ documentId: docId });
 
       await uploadToS3(uploadUrl, selectedFile);
-
-      updateUploadState({ progress: 100 });
-      toast.success("File uploaded successfully!");
 
       updateUploadState({
         status: "processing",
@@ -309,11 +270,16 @@ export default function UploadPage() {
                     )}
                   </div>
 
-                  {/* Upload Progress */}
-                  {uploadStatus === "uploading" && (
+                  {/* Unified Progress Bar - uploading (0–90%) + processing (90–99%) */}
+                  {(uploadStatus === "uploading" ||
+                    uploadStatus === "processing") && (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-dark-300">Uploading...</span>
+                        <span className="text-dark-300">
+                          {uploadStatus === "uploading"
+                            ? "Uploading..."
+                            : "Processing..."}
+                        </span>
                         <span className="text-dark-400">{uploadProgress}%</span>
                       </div>
                       <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
@@ -322,45 +288,12 @@ export default function UploadPage() {
                           style={{ width: `${uploadProgress}%` }}
                         />
                       </div>
-                    </div>
-                  )}
-
-                  {/* Processing Status with Steps */}
-                  {uploadStatus === "processing" && (
-                    <div className="space-y-4">
-                      {/* Current Step Display */}
-                      <div className="p-4 bg-dark-800 rounded-xl">
-                        {(() => {
-                          const stepInfo =
-                            getProcessingStepInfo(processingStep);
-                          const StepIcon = stepInfo.icon;
-                          return (
-                            <div className="flex items-center gap-4">
-                              <div className="w-12 h-12 bg-blue-600/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                                <StepIcon
-                                  size={24}
-                                  className="text-blue-500 animate-pulse"
-                                />
-                              </div>
-                              <div className="flex-1">
-                                <p className="font-medium">{stepInfo.label}</p>
-                                <p className="text-sm text-dark-400">
-                                  {stepInfo.description}
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Progress Bar */}
-                      <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 animate-pulse w-full" />
-                      </div>
 
                       {/* Minimize Button */}
                       <button
-                        onClick={() => updateUploadState({ isMinimized: true })}
+                        onClick={() =>
+                          updateUploadState({ isMinimized: true })
+                        }
                         className="w-full py-3 bg-dark-800 hover:bg-dark-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
                       >
                         <Minimize2 size={18} />

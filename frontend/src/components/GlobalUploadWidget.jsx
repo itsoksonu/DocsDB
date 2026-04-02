@@ -7,10 +7,6 @@ import {
   Check,
   AlertCircle,
   Maximize2,
-  Shield,
-  FileSearch,
-  Sparkles,
-  Image as ImageIcon,
   Minimize2,
 } from "../icons";
 import { useUpload } from "../contexts/UploadContext";
@@ -22,38 +18,6 @@ export default function GlobalUploadWidget() {
   const { uploadState, updateUploadState, resetUploadState } = useUpload();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const socketRef = useRef(null);
-
-  const getProcessingStepInfo = (step) => {
-    // ... existing code ...
-    const steps = {
-      "virus-scan": {
-        icon: Shield,
-        label: "Running virus scan",
-        description: "Ensuring your document is safe",
-      },
-      "extracting-content": {
-        icon: FileSearch,
-        label: "Extracting content",
-        description: "Reading document text and data",
-      },
-      "generating-metadata": {
-        icon: Sparkles,
-        label: "Generating metadata",
-        description: "Creating title, description, and tags",
-      },
-      "creating-thumbnail": {
-        icon: ImageIcon,
-        label: "Creating thumbnail",
-        description: "Generating document preview",
-      },
-      finalizing: {
-        icon: Check,
-        label: "Finalizing",
-        description: "Almost done!",
-      },
-    };
-    return steps[step] || steps["finalizing"];
-  };
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return "0 Bytes";
@@ -68,11 +32,6 @@ export default function GlobalUploadWidget() {
     let pollInterval;
 
     if (uploadState.status === "processing" && uploadState.documentId) {
-      if (!uploadState.isMinimized) {
-        toast.dismiss();
-        toast.loading("Processing document...", { duration: 2000 });
-      }
-
       // 1. Setup Socket Connection
       const socket = io(
         process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001",
@@ -142,39 +101,21 @@ export default function GlobalUploadWidget() {
         processingStep: "finalizing",
         progress: 100,
       });
-      toast.success("Document processed successfully!");
+      toast.success("Document Uploaded Successfully");
 
       setTimeout(() => {
         resetUploadState();
         router.push("/profile?tab=uploaded");
       }, 2000);
     } else if (data.step) {
-      updateUploadState({
-        processingStep: data.step,
-        progress: getProgressForStep(data.step),
-      });
+      updateUploadState({ processingStep: data.step });
     }
-  };
-
-  const getProgressForStep = (step) => {
-    const steps = {
-      "virus-scan": 10,
-      "extracting-content": 30,
-      "generating-metadata": 60,
-      "creating-thumbnail": 80,
-      finalizing: 95,
-      completed: 100,
-    };
-    return steps[step] || 50;
   };
 
   // Don't render if not minimized (shown on page) or no active upload
   if (!uploadState.isMinimized || !uploadState.file) {
     return null;
   }
-
-  const stepInfo = getProcessingStepInfo(uploadState.processingStep);
-  const StepIcon = stepInfo.icon;
 
   const handleExpand = () => {
     updateUploadState({ isMinimized: false });
@@ -204,39 +145,38 @@ export default function GlobalUploadWidget() {
 
         {/* Progress Ring (SVG) */}
         {uploadState.status === "uploading" && (
-          <svg className="absolute inset-0 w-full h-full -rotate-90 p-0.5">
+          <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 56 56">
             <circle
               cx="28"
               cy="28"
-              r="26"
+              r="25"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
+              strokeWidth="3"
               className="text-dark-700"
             />
             <circle
               cx="28"
               cy="28"
-              r="26"
+              r="25"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
+              strokeWidth="3"
+              strokeLinecap="round"
               className="text-blue-500 transition-all duration-300"
-              strokeDasharray="163.36"
-              strokeDashoffset={163.36 - (163.36 * uploadState.progress) / 100}
+              strokeDasharray="157.08"
+              strokeDashoffset={157.08 - (157.08 * uploadState.progress) / 100}
             />
           </svg>
         )}
 
         {/* Icon based on status */}
         <div className="relative z-10">
-          {uploadState.status === "uploading" && (
+          {(uploadState.status === "uploading" ||
+            uploadState.status === "processing") && (
             <span className="text-xs font-bold text-blue-500">
               {uploadState.progress}%
             </span>
-          )}
-          {uploadState.status === "processing" && (
-            <StepIcon size={24} className="text-blue-500 animate-pulse" />
           )}
           {uploadState.status === "processed" && (
             <Check size={24} className="text-green-500" />
@@ -301,11 +241,11 @@ export default function GlobalUploadWidget() {
         {/* Upload Progress */}
         {uploadState.status === "uploading" && (
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between text-xs">
               <span className="text-dark-300">Uploading...</span>
               <span className="text-dark-400">{uploadState.progress}%</span>
             </div>
-            <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-dark-800 rounded-full overflow-hidden">
               <div
                 className="h-full bg-blue-500 transition-all duration-300"
                 style={{ width: `${uploadState.progress}%` }}
@@ -316,22 +256,17 @@ export default function GlobalUploadWidget() {
 
         {/* Processing Status */}
         {uploadState.status === "processing" && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 p-3 bg-dark-800 rounded-lg">
-              <div className="w-10 h-10 bg-blue-600/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                <StepIcon size={20} className="text-blue-500 animate-pulse" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium">{stepInfo.label}</p>
-                <p className="text-xs text-dark-400">{stepInfo.description}</p>
-              </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-dark-400">Processing...</span>
+              <span className="text-dark-400">{uploadState.progress}%</span>
             </div>
             <div className="h-1.5 bg-dark-800 rounded-full overflow-hidden">
-              <div className="h-full bg-blue-500 animate-pulse w-full" />
+              <div
+                className="h-full bg-blue-500 transition-all duration-300"
+                style={{ width: `${uploadState.progress}%` }}
+              />
             </div>
-            <p className="text-xs text-center text-dark-500">
-              Processing continues in background
-            </p>
           </div>
         )}
 
