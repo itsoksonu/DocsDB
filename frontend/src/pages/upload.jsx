@@ -156,10 +156,10 @@ export default function UploadPage() {
           <div className="max-w-3xl mx-auto">
             {/* Header */}
             <div className="text-center mb-12">
-              <h1 className="font-literature text-5xl font-bold mb-4">
-                Contribute to the Collection
+              <h1 className="font-literature text-3xl md:text-5xl font-bold mb-4">
+                Contribute to the Collection.
               </h1>
-              <p className="text-dark-300 text-lg">
+              <p className="text-dark-300 text-base md:text-xl">
                 Someone out there is searching for your document. Share
                 knowledge with a global audience of 90M+ and counting.
               </p>

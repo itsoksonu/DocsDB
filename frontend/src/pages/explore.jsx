@@ -473,7 +473,7 @@ export default function Explore() {
             {/* Title row */}
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h1 className="text-2xl md:text-3xl font-bold leading-tight">
+                <h1 className="text-2xl md:text-3xl font-bold font-literature leading-tight">
                   {activeCat
                     ? `${activeCat.emoji}  ${activeCat.name}`
                     : "Explore Documents"}
@@ -610,7 +610,7 @@ export default function Explore() {
           {/* Documents grid */}
           <div className="flex-1 px-6 md:px-8 py-7">
             {loading ? (
-              <div className="flex flex-wrap gap-5">
+              <div className="flex flex-wrap justify-center gap-5">
                 {Array.from({ length: 20 }).map((_, i) => (
                   <DocumentSkeleton key={i} />
                 ))}
@@ -621,7 +621,7 @@ export default function Explore() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.25 }}
-                  className="flex flex-wrap gap-5"
+                  className="flex flex-wrap justify-center gap-5"
                 >
                   {documents.map((doc) => (
                     <DocumentCard key={doc._id} document={doc} />
@@ -630,7 +630,7 @@ export default function Explore() {
 
                 {/* Load-more skeletons */}
                 {loadingMore && (
-                  <div className="flex flex-wrap gap-5 mt-6">
+                  <div className="flex flex-wrap justify-center gap-5 mt-6">
                     {Array.from({ length: 8 }).map((_, i) => (
                       <DocumentSkeleton key={`more-${i}`} />
                     ))}

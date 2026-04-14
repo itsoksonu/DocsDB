@@ -185,7 +185,7 @@ export default function Home() {
         {/* Hero Section */}
         <section className="pt-32 px-6">
           <div className="max-w-4xl mx-auto text-center">
-            <h1 className="font-literature text-3xl md:text-5xl font-bold mb-6 bg-gradient-to-br from-white to-gray-300 bg-clip-text">
+            <h1 className="font-literature text-3xl md:text-5xl font-bold mb-6">
               Find the required document.
             </h1>
             <p className="text-base md:text-xl text-dark-300 mb-12 max-w-2xl mx-auto leading-relaxed">
