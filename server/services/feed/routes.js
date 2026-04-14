@@ -275,6 +275,10 @@ router.get(
       ]),
     query("page").optional().isInt({ min: 1 }).default(1),
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
+    query("sort")
+      .optional()
+      .isIn(["relevant", "newest", "most_views", "most_downloads"])
+      .default("relevant"),
   ],
   async (req, res, next) => {
     try {
@@ -287,12 +291,12 @@ router.get(
         });
       }
 
-      const { q, type, category, page, limit } = req.query;
+      const { q, type, category, page, limit, sort } = req.query;
       const userId = req.user?.userId || "public";
 
       const cacheKey = `search:${q}:${type}:${
         category || "all"
-      }:${page}:${limit}`;
+      }:${sort || "relevant"}:${page}:${limit}`;
 
       if (redisClient) {
         const cached = await redisClient.get(cacheKey);
@@ -309,6 +313,7 @@ router.get(
         query: q,
         type,
         category,
+        sort: sort || "relevant",
         page: parseInt(page),
         limit: parseInt(limit),
         userId,
@@ -596,7 +601,21 @@ router.post(
 );
 
 // Helper functions
-async function performSearch({ query, type, category, page, limit, userId }) {
+function getSortOrder(sort, isKeyword = false) {
+  switch (sort) {
+    case "newest":
+      return { createdAt: -1 };
+    case "most_views":
+      return { viewsCount: -1, createdAt: -1 };
+    case "most_downloads":
+      return { downloadsCount: -1, createdAt: -1 };
+    default:
+      // "relevant" — for keyword use text score, otherwise newest
+      return isKeyword ? { score: { $meta: "textScore" } } : { createdAt: -1 };
+  }
+}
+
+async function performSearch({ query, type, category, sort = "relevant", page, limit, userId }) {
   const skip = (page - 1) * limit;
 
   let searchQuery = {
@@ -628,11 +647,11 @@ async function performSearch({ query, type, category, page, limit, userId }) {
       const pipeline = [
         {
           $vectorSearch: {
-            index: "gemini-embedding", // User must create this in Atlas
+            index: "gemini-embedding",
             path: "embedding",
             queryVector: queryVector,
             numCandidates: 100,
-            limit: limit * 2, // Check more for filtering
+            limit: limit * 2,
           },
         },
         {
@@ -648,35 +667,37 @@ async function performSearch({ query, type, category, page, limit, userId }) {
             score: { $meta: "vectorSearchScore" },
           },
         },
+        // For non-relevance sorts, re-sort after vector retrieval
+        ...(sort !== "relevant" ? [{ $sort: getSortOrder(sort) }] : []),
+        { $skip: skip },
         { $limit: limit },
       ];
 
       const documents = await Document.aggregate(pipeline);
 
-      // Manually populate userId since aggregate doesn't do it automatically like find()
       await Document.populate(documents, {
         path: "userId",
         select: "name avatar",
       });
 
       return {
-        documents: documents.map((doc) => ({ ...doc, id: doc._id })), // Normalize ID
+        documents: documents.map((doc) => ({ ...doc, id: doc._id })),
         pagination: {
           page,
           limit,
-          total: documents.length, // Approximate for vector search
-          hasMore: false, // Vector search usually top-k
+          total: documents.length,
+          hasMore: false,
         },
         query,
         type: "semantic",
       };
     } catch (error) {
       logger.error("Semantic search failed, falling back to keyword:", error);
-      // Fallback to keyword search
       return performSearch({
         query,
         type: "keyword",
         category,
+        sort,
         page,
         limit,
         userId,
@@ -686,11 +707,13 @@ async function performSearch({ query, type, category, page, limit, userId }) {
     // Keyword search using MongoDB Text Index
     searchQuery.$text = { $search: query };
 
+    const sortOrder = getSortOrder(sort, true);
+
     const [documents, total] = await Promise.all([
       Document.find(searchQuery)
         .select("-metadata -embeddingsId -embedding")
         .populate("userId", "name avatar")
-        .sort({ score: { $meta: "textScore" } })
+        .sort(sortOrder)
         .skip(skip)
         .limit(limit),
       Document.countDocuments(searchQuery),

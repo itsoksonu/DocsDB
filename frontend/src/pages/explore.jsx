@@ -8,7 +8,7 @@ import { apiService } from "../services/api";
 import Footer from "../components/layout/Footer";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, X, ChevronDown, Menu, SlidersHorizontal, Layers } from "lucide-react";
+import { Search, X, ChevronDown, Menu, SlidersHorizontal, Layers, Sparkles, Clock, Eye, Download } from "lucide-react";
 import debounce from "lodash.debounce";
 
 const CATEGORIES = [
@@ -61,15 +61,15 @@ const CATEGORIES = [
   { id: "travel", name: "Travel", emoji: "✈️" },
   { id: "reference", name: "Reference", emoji: "📋" },
   { id: "design", name: "Design", emoji: "🎯" },
-  { id: "professional-development", name: "Professional Dev", emoji: "💡" },
+  { id: "professional-development", name: "Professional Devlopment", emoji: "💡" },
   { id: "other", name: "Other", emoji: "📦" },
 ];
 
 const SORT_OPTIONS = [
-  { value: "relevant", label: "Most Relevant" },
-  { value: "newest", label: "Newest First" },
-  { value: "most_views", label: "Most Viewed" },
-  { value: "most_downloads", label: "Most Downloaded" },
+  { value: "relevant", label: "Most Relevant", icon: Sparkles },
+  { value: "newest", label: "Newest First", icon: Clock },
+  { value: "most_views", label: "Most Viewed", icon: Eye },
+  { value: "most_downloads", label: "Most Downloaded", icon: Download },
 ];
 
 function SidebarItem({ cat, isActive, onClick }) {
@@ -551,19 +551,23 @@ export default function Explore() {
                         className="absolute right-0 top-full mt-2 w-48 bg-dark-900 border border-dark-700 rounded-xl shadow-2xl shadow-black/60 z-50 overflow-hidden"
                       >
                         <div className="p-1.5">
-                          {SORT_OPTIONS.map((opt) => (
-                            <button
-                              key={opt.value}
-                              onClick={() => handleSortChange(opt.value)}
-                              className={`w-full text-left px-3 py-2 text-xs rounded-lg transition-colors ${
-                                sort === opt.value
-                                  ? "bg-dark-700 text-white font-medium"
-                                  : "text-dark-400 hover:bg-dark-800 hover:text-white"
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
+                          {SORT_OPTIONS.map((opt) => {
+                            const Icon = opt.icon;
+                            return (
+                              <button
+                                key={opt.value}
+                                onClick={() => handleSortChange(opt.value)}
+                                className={`w-full text-left flex items-center gap-2.5 px-3 py-2 text-xs rounded-lg transition-colors ${
+                                  sort === opt.value
+                                    ? "bg-dark-700 text-white font-medium"
+                                    : "text-dark-400 hover:bg-dark-800 hover:text-white"
+                                }`}
+                              >
+                                <Icon size={12} className="flex-shrink-0" />
+                                {opt.label}
+                              </button>
+                            );
+                          })}
                         </div>
                       </motion.div>
                     )}
