@@ -383,8 +383,7 @@ export default function Home() {
               IT'S A DOCUMENT REPOSITORY, BUT BETTER
             </p>
             <h2
-              className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-white"
-              style={{ fontFamily: "serif" }}
+              className="font-literature text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-white"
             >
               The DocsDB difference
             </h2>
