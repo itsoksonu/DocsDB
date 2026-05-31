@@ -9,6 +9,7 @@ import { errorHandler } from "./shared/middleware/errorHandler.js";
 import { requestLogger } from "./shared/middleware/logger.js";
 import { securityHeaders } from "./shared/middleware/security.js";
 import { createRateLimiter } from "./shared/utils/rateLimiter.js";
+import logger from "./shared/utils/logger.js";
 
 import authRoutes from "./services/auth/routes.js";
 import uploadRoutes from "./services/upload/routes.js";
@@ -41,9 +42,34 @@ app.use(
   })
 );
 
+// Allowed browser origins. Built from FRONTEND_URL + a comma-separated
+// ALLOWED_ORIGINS env list + sensible production/dev defaults. Anything not in
+// the set is rejected (no Access-Control-Allow-Origin header is sent).
+const allowedOrigins = new Set(
+  [
+    process.env.FRONTEND_URL,
+    ...(process.env.ALLOWED_ORIGINS || "")
+      .split(",")
+      .map((o) => o.trim()),
+    "https://docsdb.in",
+    "https://www.docsdb.in",
+    "http://localhost:3000",
+  ].filter(Boolean)
+);
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin(origin, callback) {
+      // Allow non-browser clients (curl, server-to-server, health checks) that
+      // send no Origin header.
+      if (!origin || allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+      logger.warn(`Blocked CORS request from origin: ${origin}`);
+      // Reject without throwing: cors omits the ACAO header and the browser
+      // blocks it, but we don't surface a 500.
+      return callback(null, false);
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
