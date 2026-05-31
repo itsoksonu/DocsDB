@@ -19,6 +19,8 @@ import downloadRoutes from "./services/download/routes.js";
 import adminRoutes from "./services/admin/routes.js";
 import oauthRoutes from "./services/OAuth/routes.js";
 import reportRoutes from "./services/report/routes.js";
+import fetcherRoutes from "./services/fetcher/routes.js";
+import { initFetcherCron } from "./services/fetcher/cron.js";
 
 import databaseManager from "./shared/database/connection.js";
 
@@ -93,6 +95,7 @@ app.use(
 app.use(`/api/${process.env.API_VERSION || "v1"}/download`, downloadRoutes);
 app.use(`/api/${process.env.API_VERSION || "v1"}/report`, reportRoutes);
 app.use(`/api/${process.env.API_VERSION || "v1"}/admin`, adminRoutes);
+app.use(`/api/${process.env.API_VERSION || "v1"}/admin`, fetcherRoutes);
 
 app.use(errorHandler);
 
@@ -108,6 +111,9 @@ async function startServer() {
   try {
     await databaseManager.connectMongo();
     await databaseManager.connectRedis();
+
+    // Start the scheduled document fetcher (no-op unless enabled via env).
+    initFetcherCron();
 
     const server = app.listen(PORT, () => {
       console.log(`🚀 DocsDB Server running on port ${PORT}`);

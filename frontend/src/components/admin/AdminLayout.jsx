@@ -11,6 +11,7 @@ import {
   Menu,
   X,
   ShieldAlert,
+  DownloadCloud,
 } from "lucide-react";
 
 const AdminLayout = ({ children }) => {
@@ -61,6 +62,11 @@ const AdminLayout = ({ children }) => {
     { name: "Dashboard", href: "/admin", icon: LayoutDashboard },
     { name: "Users", href: "/admin/users", icon: Users },
     { name: "Documents", href: "/admin/documents", icon: FileText },
+    {
+      name: "Fetch Documents",
+      href: "/admin/fetch-documents",
+      icon: DownloadCloud,
+    },
     { name: "Moderation", href: "/admin/moderation", icon: ShieldAlert },
     // { name: "Settings", href: "/admin/settings", icon: Settings },
   ];
