@@ -84,6 +84,47 @@ if (!PDFJS_ASSET_DIR) {
   );
 }
 
+// pdf.js emits non-actionable render warnings ("Ran out of space in font
+// private use area", "Empty FlateDecode stream", "TT: undefined function", …)
+// directly via console.log("Warning: …"). They are per-PDF quirks we cannot fix
+// and can number in the hundreds per file. pdftoimg-js does not forward pdf.js's
+// `verbosity` option, and the warnings originate in the (separate) worker module
+// instance, so the only reliable suppression point is the shared process console.
+// We filter ONLY pdf.js's "Warning:" lines, and only for the duration of the
+// pdfToImg() call, then log a single summary count.
+async function runWithPdfWarningsSuppressed(label, fn) {
+  const origLog = console.log;
+  const origWarn = console.warn;
+  let suppressed = 0;
+  const isPdfWarning = (args) =>
+    typeof args[0] === "string" && args[0].startsWith("Warning: ");
+  console.log = (...args) => {
+    if (isPdfWarning(args)) {
+      suppressed++;
+      return;
+    }
+    origLog(...args);
+  };
+  console.warn = (...args) => {
+    if (isPdfWarning(args)) {
+      suppressed++;
+      return;
+    }
+    origWarn(...args);
+  };
+  try {
+    return await fn();
+  } finally {
+    console.log = origLog;
+    console.warn = origWarn;
+    if (suppressed > 0) {
+      logger.info(
+        `[pdf] suppressed ${suppressed} pdf.js render warning(s) during ${label}`
+      );
+    }
+  }
+}
+
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -564,13 +605,15 @@ async function generatePDFFirstPageThumbnail(filePath) {
       filePath,
     });
 
-    const result = await pdfToImg(filePath, {
-      pages: "firstPage",
-      imgType: "jpg",
-      scale: 2,
-      background: "white",
-      ...PDFJS_FONT_OPTS,
-    });
+    const result = await runWithPdfWarningsSuppressed("thumbnail", () =>
+      pdfToImg(filePath, {
+        pages: "firstPage",
+        imgType: "jpg",
+        scale: 2,
+        background: "white",
+        ...PDFJS_FONT_OPTS,
+      })
+    );
 
     const imgSrc = Array.isArray(result) ? result[0] : result;
     if (!imgSrc) {
@@ -832,13 +875,15 @@ async function extractPDFWithOCR(filePath, maxPages = 5) {
     logger.info("OCR target pages", { pagesToProcess, pageIndices });
 
     // Convert to PNG images purely in JS (pdf.js behind the scenes)
-    const images = await pdfToImg(filePath, {
-      pages: pageIndices,
-      imgType: "png",
-      scale: 1.5,
-      background: "white",
-      ...PDFJS_FONT_OPTS,
-    });
+    const images = await runWithPdfWarningsSuppressed("ocr", () =>
+      pdfToImg(filePath, {
+        pages: pageIndices,
+        imgType: "png",
+        scale: 1.5,
+        background: "white",
+        ...PDFJS_FONT_OPTS,
+      })
+    );
 
     // pdfToImg returns either an array or a single string depending on pages
     const imageList = Array.isArray(images) ? images : [images];
