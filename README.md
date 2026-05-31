@@ -108,8 +108,19 @@ GROQ_API_KEY=
 VIRUSTOTAL_API_KEY=
 
 # Rate Limiting
-RATE_LIMIT_WINDOW_MS=900000
-RATE_LIMIT_MAX_REQUESTS=100
+# Limits are Redis-backed (shared across instances) and keyed per authenticated
+# user (falling back to IP for unauthenticated requests). All values are optional
+# and have sensible production defaults — only set them to override.
+# NOTE: the legacy RATE_LIMIT_WINDOW_MS / RATE_LIMIT_MAX_REQUESTS vars are no
+# longer used; remove them.
+GLOBAL_RATE_LIMIT_WINDOW_MS=60000   # global IP safety-net window (default 60s)
+GLOBAL_RATE_LIMIT_MAX=1000          # global max requests / IP / window
+RL_AUTH_MAX=100                     # auth attempts / IP / 15 min
+RL_UPLOAD_MAX=300                   # uploads / user / hour
+RL_SEARCH_MAX=180                   # searches / user / min
+RL_WRITE_MAX=120                    # write ops / user / min
+RL_DOWNLOAD_MAX=60                  # downloads / user / min
+RL_API_MAX=5000                     # generic API / user / 15 min
 
 # File Upload
 MAX_FILE_SIZE=104857600 # 100MB
