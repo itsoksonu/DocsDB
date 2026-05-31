@@ -2,13 +2,13 @@ import express, { json, urlencoded } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import compression from "compression";
-import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
 
 import { errorHandler } from "./shared/middleware/errorHandler.js";
 import { requestLogger } from "./shared/middleware/logger.js";
 import { securityHeaders } from "./shared/middleware/security.js";
+import { createRateLimiter } from "./shared/utils/rateLimiter.js";
 
 import authRoutes from "./services/auth/routes.js";
 import uploadRoutes from "./services/upload/routes.js";
@@ -55,12 +55,15 @@ app.use(cookieParser());
 
 app.set("trust proxy", 1);
 
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 3000,
-  message: "Too many requests from this IP, please try again later.",
-  standardHeaders: true,
-  legacyHeaders: false,
+// Global safety-net limiter. Runs before auth, so it is keyed by IP. Kept
+// generous (per-route tiers do the fine-grained, per-user limiting) and skips
+// health checks. Shared across instances via Redis — see shared/utils/rateLimiter.js.
+const limiter = createRateLimiter({
+  name: "global",
+  windowMs: parseInt(process.env.GLOBAL_RATE_LIMIT_WINDOW_MS) || 60 * 1000,
+  max: parseInt(process.env.GLOBAL_RATE_LIMIT_MAX) || 1000,
+  message: "Too many requests from this IP, please slow down.",
+  skipPaths: ["/health"],
 });
 app.use(limiter);
 
