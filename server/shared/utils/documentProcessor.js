@@ -31,6 +31,59 @@ import { pdfToImg } from "pdftoimg-js";
 import { Jimp, loadFont } from "jimp";
 import { SANS_64_WHITE } from "jimp/fonts";
 
+// Resolve the pdf.js font/cmap assets bundled with pdftoimg-js so that
+// server-side rasterization (thumbnails + OCR) can load the 14 standard fonts.
+// Without these, pdf.js cannot find FoxitSerif.pfb et al. and floods the logs
+// with "fetchStandardFontData failed" / "getPathGenerator - ignoring character"
+// warnings while rendering degraded fallback glyphs.
+//
+// pdfjs-dist is nested under pdftoimg-js and guarded by an "exports" map, so we
+// resolve it via pdftoimg-js's own module scope and then walk up to the
+// directory that actually contains standard_fonts/ (robust to layout changes).
+function resolvePdfjsAssetDir() {
+  const fsSync = require("fs");
+  const candidates = [];
+  try {
+    const reqFromPdftoimg = createRequire(require.resolve("pdftoimg-js"));
+    candidates.push(reqFromPdftoimg.resolve("pdfjs-dist"));
+  } catch {
+    /* fall through */
+  }
+  try {
+    candidates.push(require.resolve("pdfjs-dist"));
+  } catch {
+    /* fall through */
+  }
+
+  for (const entry of candidates) {
+    let dir = path.dirname(entry);
+    for (let i = 0; i < 6; i++) {
+      if (fsSync.existsSync(path.join(dir, "standard_fonts"))) return dir;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return null;
+}
+
+const PDFJS_ASSET_DIR = resolvePdfjsAssetDir();
+
+const PDFJS_FONT_OPTS = PDFJS_ASSET_DIR
+  ? {
+      standardFontDataUrl:
+        path.join(PDFJS_ASSET_DIR, "standard_fonts") + path.sep,
+      cMapUrl: path.join(PDFJS_ASSET_DIR, "cmaps") + path.sep,
+      cMapPacked: true,
+    }
+  : {};
+
+if (!PDFJS_ASSET_DIR) {
+  logger.warn(
+    "Could not resolve pdfjs-dist asset directory; PDF thumbnails/OCR may emit font warnings"
+  );
+}
+
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -516,6 +569,7 @@ async function generatePDFFirstPageThumbnail(filePath) {
       imgType: "jpg",
       scale: 2,
       background: "white",
+      ...PDFJS_FONT_OPTS,
     });
 
     const imgSrc = Array.isArray(result) ? result[0] : result;
@@ -783,6 +837,7 @@ async function extractPDFWithOCR(filePath, maxPages = 5) {
       imgType: "png",
       scale: 1.5,
       background: "white",
+      ...PDFJS_FONT_OPTS,
     });
 
     // pdfToImg returns either an array or a single string depending on pages
