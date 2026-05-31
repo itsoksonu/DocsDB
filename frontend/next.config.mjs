@@ -16,6 +16,11 @@ const withPWA = withPWAInit({
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
+  webpack: (config) => {
+    // Required for react-pdf / pdfjs-dist to work with Next.js
+    config.resolve.alias.canvas = false;
+    return config;
+  },
   images: {
     domains: ["docsdb-upload.amazonaws.com"],
   },

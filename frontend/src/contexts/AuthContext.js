@@ -46,11 +46,9 @@ export const AuthProvider = ({ children }) => {
 
       if (!token) {
         // No access token, try to get one using refresh token
-        console.log("No access token found, attempting to refresh...");
         const refreshSuccess = await refreshTokenSilently();
 
         if (!refreshSuccess) {
-          console.log("No valid session found");
           setLoading(false);
           return;
         }
@@ -60,10 +58,8 @@ export const AuthProvider = ({ children }) => {
       try {
         const response = await apiService.getCurrentUser();
         setUser(response.data.user);
-        console.log("User authenticated successfully");
       } catch (error) {
         // If getCurrentUser fails, try refreshing token
-        console.log("Failed to get user, attempting token refresh...");
         const refreshSuccess = await refreshTokenSilently();
 
         if (refreshSuccess) {
@@ -71,7 +67,6 @@ export const AuthProvider = ({ children }) => {
           try {
             const response = await apiService.getCurrentUser();
             setUser(response.data.user);
-            console.log("User authenticated after refresh");
           } catch (retryError) {
             console.error("Failed to get user after refresh:", retryError);
             localStorage.removeItem("accessToken");
@@ -90,26 +85,22 @@ export const AuthProvider = ({ children }) => {
 
   const refreshTokenSilently = async () => {
     if (refreshing) {
-      console.log("Refresh already in progress, skipping...");
       return false;
     }
 
     setRefreshing(true);
     try {
-      console.log("Attempting to refresh token...");
       const response = await apiService.refreshToken();
       const newAccessToken = response.data.accessToken;
 
       if (newAccessToken) {
         localStorage.setItem("accessToken", newAccessToken);
-        console.log("Token refreshed successfully");
 
         // Fetch user data if we don't have it
         if (!user) {
           try {
             const userResponse = await apiService.getCurrentUser();
             setUser(userResponse.data.user);
-            console.log("User data fetched after refresh");
           } catch (err) {
             console.error("Failed to fetch user after refresh:", err);
           }
@@ -123,7 +114,6 @@ export const AuthProvider = ({ children }) => {
 
       // Only logout if it's a 401 (unauthorized) error
       if (error.response?.status === 401) {
-        console.log("Refresh token expired, clearing session...");
         localStorage.removeItem("accessToken");
         setUser(null);
       }
