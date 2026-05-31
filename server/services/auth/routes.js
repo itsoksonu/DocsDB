@@ -103,8 +103,13 @@ router.post("/refresh", async (req, res, next) => {
 });
 
 // Logout
-router.post("/logout", authMiddleware, (req, res) => {
-  res.clearCookie("refreshToken");
+router.post("/logout", (req, res) => {
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/",
+  });
   res.json({
     success: true,
     message: "Logout successful",
@@ -147,10 +152,6 @@ router.get("/me", authMiddleware, async (req, res, next) => {
 
           // Verify it looks like a file key (e.g. avatars/...)
           if (key && !key.includes("amazonaws.com")) {
-            console.log(
-              `Fixing stale encoded avatar URL for user ${user._id}: ${key}`
-            );
-
             // Update DB asynchronously to fix the corruption
             await User.findByIdAndUpdate(user._id, { avatar: key });
             userObj.avatar = key; // Use the fixed key for generating new URL

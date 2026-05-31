@@ -65,6 +65,63 @@ processDocumentQueue.process("process-document", async (job) => {
   }
 });
 
+// Automated Document Fetcher job. Searches external open-access sources,
+// downloads documents, and enqueues each as a normal "process-document" job.
+// fetchDocuments is imported dynamically to avoid a circular import
+// (fetcher.js depends on processDocumentQueue exported from this file).
+processDocumentQueue.process("fetch-documents", async (job) => {
+  const { category, count, requestedBy } = job.data;
+
+  logger.info(
+    `Starting fetch job ${job.id}: category="${category}" count=${count}`
+  );
+
+  try {
+    const { fetchDocuments, resolveOwnerId } = await import(
+      "../utils/documentFetcher/fetcher.js"
+    );
+
+    const userId = await resolveOwnerId(requestedBy);
+    if (!userId) {
+      throw new Error(
+        "No owner user for fetched documents — set FETCHER_SYSTEM_USER_ID or create an admin user"
+      );
+    }
+
+    const { documents } = await fetchDocuments({
+      category,
+      count,
+      userId,
+      onProgress: (progress) => {
+        // Surface progress to Bull so GET /fetch-docs/:jobId can report it.
+        job.progress(progress);
+      },
+    });
+
+    logger.info(
+      `Fetch job ${job.id} complete: ingested ${documents.length}/${count}`
+    );
+
+    return {
+      success: true,
+      category,
+      requested: count,
+      ingested: documents.length,
+      documents: documents.map((d) => ({
+        documentId: d.documentId,
+        source: d.source,
+        title: d.sourceMetadata?.title,
+        url: d.originalUrl,
+        license: d.sourceMetadata?.license,
+        sizeMB: d.sizeMB,
+      })),
+    };
+  } catch (error) {
+    logger.error(`Fetch job ${job.id} failed:`, error);
+    throw error;
+  }
+});
+
 // Event handlers
 processDocumentQueue.on("completed", (job, result) => {
   logger.info(`Job ${job.id} completed for document ${result.documentId}`);

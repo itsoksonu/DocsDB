@@ -25,8 +25,14 @@ import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
 import { CollectionModal } from "../../components/common/CollectionModal";
 import { ShareModal } from "../../components/common/ShareModal";
+import dynamic from "next/dynamic";
 import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
 import axios from "axios";
+
+const PDFViewer = dynamic(
+  () => import("../../components/ui/PDFViewer").then((m) => m.PDFViewer),
+  { ssr: false, loading: () => <div className="w-full h-full flex items-center justify-center bg-dark-800"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" /></div> }
+);
 
 const DocumentViewerPage = ({
   initialDocument,
@@ -48,6 +54,14 @@ const DocumentViewerPage = ({
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [csvData, setCsvData] = useState([]);
   const [csvLoading, setCsvLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 1024);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   // Sync state with props if they change (e.g. shallow routing)
   useEffect(() => {
@@ -197,11 +211,11 @@ const DocumentViewerPage = ({
     const encodedUrl = encodeURIComponent(viewUrl);
 
     if (["xlsx", "xls", "doc", "docx", "ppt", "pptx"].includes(type)) {
+      // Office Live doesn't embed on mobile — fall back to Google Docs viewer
+      if (isMobile) {
+        return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
+      }
       return `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
-    }
-
-    if (type === "pdf") {
-      return viewUrl;
     }
 
     return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
@@ -272,7 +286,12 @@ const DocumentViewerPage = ({
       return renderCsvPreview();
     }
 
-    // 2. Handle others via Iframe
+    // 2. Handle PDFs with react-pdf (works on all devices, no page/size limit)
+    if (type === "pdf" && viewUrl) {
+      return <PDFViewer url={viewUrl} onFullScreen={handleFullScreen} />;
+    }
+
+    // 3. Handle Office files and others via iframe
     const viewerSrc = getViewerUrl();
 
     if (!viewerSrc) {
@@ -297,6 +316,7 @@ const DocumentViewerPage = ({
         className="w-full h-full bg-white"
         title={document.generatedTitle}
         frameBorder="0"
+        allowFullScreen
       />
     );
   };
@@ -421,7 +441,7 @@ const DocumentViewerPage = ({
                       {document.fileType}
                     </span>
                     {document.category && (
-                      <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-xs font-medium">
+                      <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-xs font-medium capitalize">
                         {document.category}
                       </span>
                     )}
@@ -575,7 +595,7 @@ const DocumentViewerPage = ({
                             {document.tags.map((tag, index) => (
                               <span
                                 key={index}
-                                className="px-2 py-1 bg-dark-800 text-dark-300 rounded text-xs hover:bg-dark-700 transition-colors cursor-pointer"
+                                className="px-2 py-1 bg-dark-800 text-dark-300 rounded text-xs hover:bg-dark-700 transition-colors cursor-pointer capitalize"
                               >
                                 {tag}
                               </span>
@@ -590,7 +610,7 @@ const DocumentViewerPage = ({
 
               {/* Middle Column - Document Viewer */}
               <div className="lg:col-span-6">
-                <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl border border-dark-800/50 overflow-hidden sticky top-24 relative group">
+                <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl border border-dark-800/50 overflow-hidden sticky top-24 group">
                   {/* Top Action Bar for Viewer */}
                   <div className="absolute top-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button

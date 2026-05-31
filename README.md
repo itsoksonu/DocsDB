@@ -114,6 +114,14 @@ RATE_LIMIT_MAX_REQUESTS=100
 # File Upload
 MAX_FILE_SIZE=104857600 # 100MB
 ALLOWED_FILE_TYPES=pdf,docx,pptx,xlsx,csv
+
+# Automated Document Fetcher
+FETCHER_CONTACT_EMAIL=admin@mysite.com   # included in the outbound User-Agent (required by some sources)
+FETCHER_SYSTEM_USER_ID=                  # owner user id for fetched docs; falls back to the first admin user
+FETCHER_CRON_ENABLED=false               # set true to enable the scheduled fetcher
+FETCHER_CRON_SCHEDULE=0 3 * * *          # cron expression — default 3 AM daily
+FETCHER_CRON_CATEGORIES=science,health,technology,fiction,education
+FETCHER_CRON_COUNT_PER_CATEGORY=20       # documents to fetch per category per run
 ```
 
 ### Frontend Configuration
@@ -156,6 +164,94 @@ DocsDB/
 ├── package.json       # Root configuration
 └── README.md          # Project documentation
 ```
+
+## 📥 Automated Document Fetcher
+
+The Automated Document Fetcher ingests openly-licensed documents from external
+sources (Project Gutenberg, arXiv, PubMed Central, Internet Archive, OpenStax)
+and feeds them through the **same** processing pipeline as user uploads
+(metadata generation, thumbnails, virus scan, embeddings).
+
+**Flow:** admin/cron → Bull `"fetch-documents"` job → `fetchDocuments()` searches
+the category's adapters → downloads, de-dupes (by SHA-256 + source id), uploads
+to S3 (`uploads/fetched/{source}/...`) → creates a `Document` (`status: "processing"`)
+→ enqueues the existing `"process-document"` worker.
+
+### Admin usage
+
+- **UI:** Admin panel → **Fetch Documents**. Pick a category and a count (1–100),
+  click **Start Fetch**, and watch live progress.
+- **API** (admin-only, behind `authMiddleware + requireRole(["admin"])`):
+  - `POST /api/v1/admin/fetch-docs` — body `{ category, count }` → `{ jobId }`
+  - `GET  /api/v1/admin/fetch-docs/:jobId` → `{ status, progress, result, failReason }`
+
+### Scheduled fetching
+
+Set `FETCHER_CRON_ENABLED=true` to enable the nightly cron (see env vars above).
+On each run it enqueues a fetch job per category in `FETCHER_CRON_CATEGORIES`,
+each requesting `FETCHER_CRON_COUNT_PER_CATEGORY` documents. The cron is a no-op
+when disabled. Fetched documents are owned by `FETCHER_SYSTEM_USER_ID` (or the
+first admin user if unset).
+
+### Source modules
+
+```
+server/services/fetcher/
+  routes.js          # admin API (POST/GET fetch-docs)
+  cron.js            # node-cron scheduled job
+server/shared/utils/documentFetcher/
+  fetcher.js         # orchestrator (search → download → dedupe → S3 → enqueue)
+  categoryMap.js     # category → ordered adapter list
+  adapters/          # one file per source
+```
+
+### Adding a new adapter
+
+1. Create `server/shared/utils/documentFetcher/adapters/<name>.js` exporting:
+
+   ```js
+   export async function search(query, maxResults) {
+     // returns Array<{ id, title, author, year, url, format, license }>
+     // - `url` must be a direct download link to an allowed file type
+     //   (pdf, docx, pptx, xlsx, csv)
+     // - include the polite User-Agent on outbound requests:
+     //   `DocsDB-Fetcher/1.0 (contact: ${process.env.FETCHER_CONTACT_EMAIL})`
+     // - never throw: catch errors, log via logger, and return []
+   }
+   ```
+
+2. Register it in `fetcher.js`: `import * as <name> from "./adapters/<name>.js";`
+   and add it to the `ADAPTERS` map.
+3. Route categories to it in `categoryMap.js` by adding the adapter name to the
+   relevant category arrays (order = priority). Unmapped categories fall back to
+   `["archive"]`.
+
+> **Politeness:** the orchestrator enforces a max of 1 request/second per
+> adapter, a 60s download timeout, and one retry before skipping. Only fetch
+> from openly-licensed sources — never copyrighted services (Scribd, Z-Library,
+> Sci-Hub, etc.).
+
+### Adding an OpenStax book
+
+OpenStax titles are a hardcoded curated list in `adapters/openstax.js`. To add one:
+
+1. Open the book's page at <https://openstax.org/subjects> and copy its direct
+   PDF download link (the `assets.openstax.org/...-WEB.pdf` URL).
+2. Append an entry to the `BOOKS` array:
+
+   ```js
+   {
+     id: "openstax-<slug>",          // stable unique id (used for de-dup)
+     title: "Book Title",
+     author: "OpenStax",
+     year: "2024",
+     url: "https://assets.openstax.org/.../BookTitle-WEB.pdf",
+     subjects: ["science", "education"], // platform categories that route here
+   }
+   ```
+
+   `format` and `license` (CC BY 4.0) are applied automatically. If a download
+   later starts failing, refresh the `url` from the OpenStax site.
 
 ## 🤝 Contributing
 

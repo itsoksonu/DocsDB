@@ -88,7 +88,14 @@ const documentSchema = new mongoose.Schema({
       scanner: String,
     scannedAt: Date
     },
-  metadata: mongoose.Schema.Types.Mixed 
+    // Automated fetcher provenance (set when a document is ingested by the
+    // Document Fetcher rather than uploaded by a user).
+    sourceUrl: String,
+    sourceName: String, // e.g. "gutenberg", "arxiv", "pubmed", "archive", "openstax"
+    sourceId: String, // the external ID from the source
+    license: String, // e.g. "public domain", "CC BY 4.0"
+    fileHash: String, // SHA-256 of the file bytes
+  metadata: mongoose.Schema.Types.Mixed
 }, {
   timestamps: true
 });
@@ -98,6 +105,11 @@ documentSchema.index({ userId: 1, createdAt: -1 });
 documentSchema.index({ status: 1, createdAt: -1 });
 documentSchema.index({ category: 1, createdAt: -1 });
 documentSchema.index({ tags: 1 });
+// Sparse unique index so fetched documents can be de-duplicated by content
+// hash, while user-uploaded documents (which have no fileHash) are unaffected.
+documentSchema.index({ fileHash: 1 }, { unique: true, sparse: true });
+// Lookup by source provenance for de-duplication against previously fetched docs.
+documentSchema.index({ sourceName: 1, sourceId: 1 });
 documentSchema.index({
   'generatedTitle': 'text', 
   'generatedDescription': 'text',

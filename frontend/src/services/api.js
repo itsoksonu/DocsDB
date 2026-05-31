@@ -69,7 +69,6 @@ class APIService {
           this.isRefreshing = true;
 
           try {
-            console.log("API interceptor: Attempting token refresh...");
             const response = await this.refreshToken();
             const accessToken =
               response.data?.data?.accessToken || response.data?.accessToken;
@@ -79,7 +78,6 @@ class APIService {
             }
 
             localStorage.setItem("accessToken", accessToken);
-            console.log("API interceptor: Token refreshed successfully");
 
             // Process queued requests
             this.processQueue(null, accessToken);
@@ -99,7 +97,6 @@ class APIService {
             // Only clear token and redirect if refresh token is invalid/expired
             if (refreshError.response?.status === 401) {
               localStorage.removeItem("accessToken");
-              console.log("API interceptor: Refresh token expired");
             }
             return Promise.reject(refreshError);
           } finally {
@@ -388,6 +385,19 @@ class APIService {
       `/admin/documents/${documentId}`,
       data,
     );
+    return response.data;
+  }
+
+  async startFetchJob(category, count) {
+    const response = await this.client.post("/admin/fetch-docs", {
+      category,
+      count,
+    });
+    return response.data;
+  }
+
+  async getFetchJobStatus(jobId) {
+    const response = await this.client.get(`/admin/fetch-docs/${jobId}`);
     return response.data;
   }
 }
