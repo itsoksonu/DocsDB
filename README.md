@@ -73,6 +73,10 @@ Create a `.env` file in the `server` directory with the following variables:
 PORT=3001
 NODE_ENV=development
 FRONTEND_URL=http://localhost:3000
+# Extra browser origins allowed by CORS (comma-separated). FRONTEND_URL,
+# https://docsdb.in, https://www.docsdb.in and http://localhost:3000 are always
+# allowed. Add preview/staging domains here.
+ALLOWED_ORIGINS=
 API_VERSION=v1
 
 # Database
