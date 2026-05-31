@@ -130,6 +130,13 @@ RL_API_MAX=5000                     # generic API / user / 15 min
 MAX_FILE_SIZE=104857600 # 100MB
 ALLOWED_FILE_TYPES=pdf,docx,pptx,xlsx,csv
 
+# PDF processing / OCR memory tuning (defaults are tuned for ~512MB instances)
+# OCR renders one page at a time with a single reusable Tesseract worker.
+DISABLE_OCR=false        # set true to skip OCR entirely (lowest memory; scanned PDFs yield no text)
+OCR_MAX_PAGES=3          # max pages to OCR per scanned PDF
+OCR_SCALE=1.2            # rasterization scale for OCR pages (lower = less memory)
+THUMBNAIL_SCALE=1.5      # rasterization scale for the first-page thumbnail
+
 # Automated Document Fetcher
 FETCHER_CONTACT_EMAIL=admin@mysite.com   # included in the outbound User-Agent (required by some sources)
 FETCHER_SYSTEM_USER_ID=                  # owner user id for fetched docs; falls back to the first admin user

@@ -125,6 +125,16 @@ async function runWithPdfWarningsSuppressed(label, fn) {
   }
 }
 
+// --- PDF rasterization / OCR memory tuning -------------------------------
+// pdf.js + canvas + Tesseract are the heaviest memory users in the pipeline.
+// On small instances (e.g. Render's 512 MB tier) the defaults below keep peak
+// RSS bounded: OCR renders ONE page at a time, reuses a single Tesseract
+// worker, and uses modest rasterization scales. All overridable via env.
+const OCR_ENABLED = process.env.DISABLE_OCR !== "true";
+const OCR_MAX_PAGES = parseInt(process.env.OCR_MAX_PAGES, 10) || 3;
+const OCR_SCALE = parseFloat(process.env.OCR_SCALE) || 1.2;
+const THUMBNAIL_SCALE = parseFloat(process.env.THUMBNAIL_SCALE) || 1.5;
+
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -609,7 +619,7 @@ async function generatePDFFirstPageThumbnail(filePath) {
       pdfToImg(filePath, {
         pages: "firstPage",
         imgType: "jpg",
-        scale: 2,
+        scale: THUMBNAIL_SCALE,
         background: "white",
         ...PDFJS_FONT_OPTS,
       })
@@ -777,8 +787,11 @@ async function extractFromPDF(filePath) {
 
   try {
     if (!pdfParse || typeof pdfParse !== "function") {
+      if (!OCR_ENABLED) {
+        throw new Error("pdf-parse unavailable and OCR is disabled");
+      }
       logger.warn("pdf-parse not available, falling back to OCR");
-      const ocrText = await extractPDFWithOCR(filePath, 5);
+      const ocrText = await extractPDFWithOCR(filePath);
 
       if (!ocrText || !ocrText.trim()) {
         throw new Error("No OCR text extracted from PDF images");
@@ -824,12 +837,20 @@ async function extractFromPDF(filePath) {
     }
 
     // 2) Fallback to OCR if pdf-parse yields too little
+    if (!OCR_ENABLED) {
+      logger.warn(
+        "pdf-parse yielded little text and OCR is disabled; using what we have",
+        { filePath, length: text.length }
+      );
+      return text;
+    }
+
     logger.warn(
       "PDF text too short or empty from pdf-parse; falling back to OCR...",
       { filePath, length: text.length }
     );
 
-    const ocrText = await extractPDFWithOCR(filePath, 5);
+    const ocrText = await extractPDFWithOCR(filePath);
 
     if (!ocrText || !ocrText.trim()) {
       throw new Error("No OCR text extracted from PDF images");
@@ -852,15 +873,21 @@ async function extractFromPDF(filePath) {
   }
 }
 
-async function extractPDFWithOCR(filePath, maxPages = 5) {
+async function extractPDFWithOCR(filePath, maxPages = OCR_MAX_PAGES) {
   const start = Date.now();
   logger.info("Starting OCR extraction for PDF...", {
     filePath,
     maxPages,
+    scale: OCR_SCALE,
   });
 
+  // Single reusable Tesseract worker — created once and terminated in finally.
+  // The old code called Tesseract.recognize() per page, which reloaded the
+  // ~15 MB English model every time and risked leaking workers. Rendering and
+  // OCR'ing one page at a time keeps peak memory to a single page image, which
+  // is what lets this run within a 512 MB instance.
+  let worker;
   try {
-    // Use pdf-lib just to determine page count (pure JS)
     const fs = await import("fs");
     const pdfBytes = await fs.promises.readFile(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -870,56 +897,39 @@ async function extractPDFWithOCR(filePath, maxPages = 5) {
     if (pagesToProcess === 0) {
       throw new Error("PDF has zero pages");
     }
+    logger.info("OCR target pages", { pagesToProcess });
 
-    const pageIndices = Array.from({ length: pagesToProcess }, (_, i) => i + 1);
-    logger.info("OCR target pages", { pagesToProcess, pageIndices });
-
-    // Convert to PNG images purely in JS (pdf.js behind the scenes)
-    const images = await runWithPdfWarningsSuppressed("ocr", () =>
-      pdfToImg(filePath, {
-        pages: pageIndices,
-        imgType: "png",
-        scale: 1.5,
-        background: "white",
-        ...PDFJS_FONT_OPTS,
-      })
-    );
-
-    // pdfToImg returns either an array or a single string depending on pages
-    const imageList = Array.isArray(images) ? images : [images];
-
-    if (!imageList.length) {
-      throw new Error("pdftoimg-js returned no images for OCR");
-    }
+    worker = await Tesseract.createWorker("eng");
 
     let combinedText = "";
 
-    for (let i = 0; i < imageList.length; i++) {
-      const src = imageList[i];
+    for (let page = 1; page <= pagesToProcess; page++) {
+      // Render just THIS page so only one page image is in memory at a time.
+      const rendered = await runWithPdfWarningsSuppressed("ocr", () =>
+        pdfToImg(filePath, {
+          pages: [page],
+          imgType: "png",
+          scale: OCR_SCALE,
+          background: "white",
+          ...PDFJS_FONT_OPTS,
+        })
+      );
+
+      const src = Array.isArray(rendered) ? rendered[0] : rendered;
       if (!src) continue;
 
-      // Expecting DataURL like "data:image/png;base64,...."
       const base64 = src.includes(",") ? src.split(",")[1] : src;
-      const buffer = Buffer.from(base64, "base64");
+      let buffer = Buffer.from(base64, "base64");
 
-      logger.info("Running Tesseract OCR on page image", {
-        page: pageIndices[i],
-      });
-
-      // Tesseract.js is pure JS + WASM, works fine on Render
-      const result = await Tesseract.recognize(buffer, "eng");
+      const result = await worker.recognize(buffer);
       const pageText = (result.data && result.data.text) || "";
-
-      logger.info("OCR page result", {
-        page: pageIndices[i],
-        length: pageText.length,
-      });
+      logger.info("OCR page result", { page, length: pageText.length });
 
       combinedText += pageText + "\n";
+      buffer = null; // release the page image before the next iteration
     }
 
     combinedText = combinedText.trim();
-
     if (!combinedText) {
       throw new Error("No OCR text extracted from PDF images");
     }
@@ -938,6 +948,14 @@ async function extractPDFWithOCR(filePath, maxPages = 5) {
       stack: err.stack,
     });
     throw err;
+  } finally {
+    if (worker) {
+      try {
+        await worker.terminate();
+      } catch (e) {
+        logger.warn(`Failed to terminate Tesseract worker: ${e.message}`);
+      }
+    }
   }
 }
 
