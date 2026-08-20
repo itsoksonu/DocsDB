@@ -162,6 +162,19 @@ async function startServer() {
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     });
+
+    // View and download counts are buffered in Redis; drain the buffer before
+    // the process goes away so a deploy does not throw away the last window.
+    const { stopCounters } = await import("./shared/utils/counters.js");
+    const shutdown = async (signal) => {
+      console.log(`Received ${signal}, flushing counters and shutting down`);
+      server.close();
+      await stopCounters();
+      await databaseManager.disconnect();
+      process.exit(0);
+    };
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => shutdown("SIGINT"));
   } catch (error) {
     console.error("Failed to start server:", error);
     process.exit(1);

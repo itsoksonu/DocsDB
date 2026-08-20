@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/auth.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
 import User from '../../shared/models/User.js';
+import UserWallet from '../../shared/models/UserWallet.js';
 import Document from '../../shared/models/Document.js';
 import Earnings from '../../shared/models/Earnings.js';
 import Payouts from '../../shared/models/Payouts.js';
@@ -122,22 +123,22 @@ router.post('/payouts/request',
       const { amount } = req.body;
       const userId = req.user.userId;
 
-      const user = await User.findById(userId);
-      if (!user) {
+      const wallet = await UserWallet.findOne({ userId });
+      if (!wallet) {
         return res.status(404).json({
           success: false,
           message: 'User not found'
         });
       }
 
-      if (user.walletBalance < amount) {
+      if (wallet.balance < amount) {
         return res.status(400).json({
           success: false,
           message: 'Insufficient balance for payout'
         });
       }
 
-      if (user.kycStatus !== 'verified') {
+      if (wallet.kycStatus !== 'verified') {
         return res.status(400).json({
           success: false,
           message: 'KYC verification required before requesting payouts'
@@ -183,14 +184,24 @@ router.get('/settings',
     try {
       const userId = req.user.userId;
 
-      const user = await User.findById(userId).select('payoutDetails monetizationEnabled walletBalance kycStatus');
-      const documents = await Document.find({ userId, monetizationEnabled: true }).countDocuments();
+      const [user, wallet, documents] = await Promise.all([
+        User.findById(userId).select('preferences').lean(),
+        UserWallet.getOrCreate(userId),
+        Document.countDocuments({ userId, monetizationEnabled: true })
+      ]);
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
 
       const settings = {
-        monetizationEnabled: user.monetizationEnabled,
-        walletBalance: user.walletBalance,
-        kycStatus: user.kycStatus,
-        payoutDetails: user.payoutDetails,
+        monetizationEnabled: user.preferences?.monetizationEnabled ?? true,
+        walletBalance: wallet.balance,
+        kycStatus: wallet.kycStatus,
+        payoutDetails: wallet.payoutDetails,
         monetizedDocuments: documents,
         minimumPayout: 50,
         payoutFeePercentage: 2.9,
@@ -230,7 +241,7 @@ router.patch('/settings',
 
       const updateData = {};
       if (monetizationEnabled !== undefined) {
-        updateData.monetizationEnabled = monetizationEnabled;
+        updateData['preferences.monetizationEnabled'] = monetizationEnabled;
       }
 
       await User.findByIdAndUpdate(userId, { $set: updateData });
@@ -280,11 +291,14 @@ router.post('/onboarding',
         type: 'account_onboarding',
       });
 
-      await User.findByIdAndUpdate(userId, {
-        $set: {
-          'payoutDetails.stripeAccountId': account.id
-        }
-      });
+      await UserWallet.updateOne(
+        { userId },
+        {
+          $set: { 'payoutDetails.stripeAccountId': account.id },
+          $setOnInsert: { userId }
+        },
+        { upsert: true }
+      );
 
       res.json({
         success: true,
@@ -307,19 +321,12 @@ router.get('/kyc-status',
   async (req, res, next) => {
     try {
       const userId = req.user.userId;
-      const user = await User.findById(userId).select('kycStatus payoutDetails');
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
+      const wallet = await UserWallet.getOrCreate(userId);
 
       let stripeStatus = null;
-      if (user.payoutDetails?.stripeAccountId) {
+      if (wallet.payoutDetails?.stripeAccountId) {
         try {
-          const account = await stripe.accounts.retrieve(user.payoutDetails.stripeAccountId);
+          const account = await stripe.accounts.retrieve(wallet.payoutDetails.stripeAccountId);
           stripeStatus = account.charges_enabled && account.payouts_enabled;
         } catch (error) {
           logger.error('Error checking Stripe account status:', error);
@@ -329,9 +336,9 @@ router.get('/kyc-status',
       res.json({
         success: true,
         data: {
-          kycStatus: user.kycStatus,
+          kycStatus: wallet.kycStatus,
           stripeVerified: stripeStatus,
-          requirements: getKYCRequirements(user.kycStatus, stripeStatus)
+          requirements: getKYCRequirements(wallet.kycStatus, stripeStatus)
         }
       });
 
@@ -416,7 +423,7 @@ router.post('/admin/payouts/:payoutId/process',
 
       const { payoutId } = req.params;
 
-      const payout = await Payouts.findById(payoutId).populate('userId');
+      const payout = await Payouts.findById(payoutId);
       if (!payout) {
         return res.status(404).json({
           success: false,
@@ -431,14 +438,24 @@ router.post('/admin/payouts/:payoutId/process',
         });
       }
 
+      const wallet = await UserWallet.findOne({ userId: payout.userId }).lean();
+      const stripeAccountId = wallet?.payoutDetails?.stripeAccountId;
+
+      if (!stripeAccountId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Recipient has no connected Stripe account'
+        });
+      }
+
       try {
         const transfer = await stripe.transfers.create({
           amount: Math.round(payout.amount * 100), // Convert to cents
           currency: 'usd',
-          destination: payout.userId.payoutDetails.stripeAccountId,
+          destination: stripeAccountId,
           metadata: {
             payoutId: payout._id.toString(),
-            userId: payout.userId._id.toString()
+            userId: payout.userId.toString()
           }
         });
 

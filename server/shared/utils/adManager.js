@@ -1,17 +1,16 @@
 import Document from '../models/Document.js';
-import databaseManager from '../database/connection.js';
+import { getRedis } from './redis.js';
 import logger from './logger.js';
 
 // Cache for sponsored documents
 const SPONSORED_CACHE_KEY = 'sponsored:documents';
 const CACHE_TTL = 300; // 5 minutes
 
-const redisClient = databaseManager.getRedisClient();
 
 export async function getSponsoredDocuments(limit = 10) {
   try {
-    if (redisClient) {
-      const cached = await redisClient.get(SPONSORED_CACHE_KEY);
+    if (getRedis()) {
+      const cached = await getRedis().get(SPONSORED_CACHE_KEY);
       if (cached) {
         return JSON.parse(cached).slice(0, limit);
       }
@@ -29,8 +28,8 @@ export async function getSponsoredDocuments(limit = 10) {
     .sort({ 'metadata.sponsorPriority': -1, createdAt: -1 })
     .limit(limit * 2); // Get more for variety
 
-    if (redisClient && sponsoredDocs.length > 0) {
-      await redisClient.setEx(SPONSORED_CACHE_KEY, CACHE_TTL, JSON.stringify(sponsoredDocs));
+    if (getRedis() && sponsoredDocs.length > 0) {
+      await getRedis().setEx(SPONSORED_CACHE_KEY, CACHE_TTL, JSON.stringify(sponsoredDocs));
     }
 
     return sponsoredDocs.slice(0, limit);
@@ -53,10 +52,10 @@ export async function trackAdImpression(adId, userId, documentId = null) {
     // In production, this would send to analytics service
     logger.info('Ad impression tracked:', impressionData);
 
-    if (redisClient) {
+    if (getRedis()) {
       const key = `ad:metrics:${adId}`;
-      await redisClient.hIncrBy(key, 'impressions', 1);
-      await redisClient.expire(key, 86400); // 24 hours TTL
+      await getRedis().hIncrBy(key, 'impressions', 1);
+      await getRedis().expire(key, 86400); // 24 hours TTL
     }
 
     return true;
@@ -78,9 +77,9 @@ export async function trackAdClick(adId, userId, documentId = null) {
 
     logger.info('Ad click tracked:', clickData);
 
-    if (redisClient) {
+    if (getRedis()) {
       const key = `ad:metrics:${adId}`;
-      await redisClient.hIncrBy(key, 'clicks', 1);
+      await getRedis().hIncrBy(key, 'clicks', 1);
     }
 
     return true;
@@ -92,12 +91,12 @@ export async function trackAdClick(adId, userId, documentId = null) {
 
 export async function getAdMetrics(adId) {
   try {
-    if (!redisClient) {
+    if (!getRedis()) {
       return null;
     }
 
     const key = `ad:metrics:${adId}`;
-    const metrics = await redisClient.hGetAll(key);
+    const metrics = await getRedis().hGetAll(key);
 
     if (!metrics.impressions) {
       return null;

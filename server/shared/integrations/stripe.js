@@ -40,22 +40,22 @@ export async function handleStripeWebhook(event) {
 
 async function handleAccountUpdated(account) {
   try {
-    const User = (await import('../models/User.js')).default;
-    const user = await User.findOne({ 
-      'payoutDetails.stripeAccountId': account.id 
+    const UserWallet = (await import('../models/UserWallet.js')).default;
+    const wallet = await UserWallet.findOne({
+      'payoutDetails.stripeAccountId': account.id
     });
 
-    if (!user) {
+    if (!wallet) {
       logger.warn(`No user found for Stripe account: ${account.id}`);
       return;
     }
 
     const isVerified = account.charges_enabled && account.payouts_enabled;
-    user.kycStatus = isVerified ? 'verified' : 'pending';
-    
-    await user.save();
+    wallet.kycStatus = isVerified ? 'verified' : 'pending';
 
-    logger.info(`Updated KYC status for user ${user._id}: ${user.kycStatus}`);
+    await wallet.save();
+
+    logger.info(`Updated KYC status for user ${wallet.userId}: ${wallet.kycStatus}`);
   } catch (error) {
     logger.error('Error handling account.updated:', error);
   }

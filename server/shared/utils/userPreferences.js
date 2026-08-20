@@ -1,17 +1,17 @@
-import databaseManager from '../database/connection.js';
-import User from '../models/User.js';
+import mongoose from 'mongoose';
+import { getRedis } from './redis.js';
+import Document from '../models/Document.js';
 import logger from './logger.js';
 
 const USER_PREFS_PREFIX = 'user:prefs:';
 const PREF_TTL = 86400;
 
-const redisClient = databaseManager.getRedisClient();
 
 export async function getUserPreferences(userId) {
   try {
-    if (redisClient) {
+    if (getRedis()) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;
-      const cached = await redisClient.get(cacheKey);
+      const cached = await getRedis().get(cacheKey);
       if (cached) {
         return JSON.parse(cached);
       }
@@ -19,9 +19,9 @@ export async function getUserPreferences(userId) {
 
     const preferences = await generateUserPreferences(userId);
 
-    if (redisClient) {
+    if (getRedis()) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;
-      await redisClient.setEx(cacheKey, PREF_TTL, JSON.stringify(preferences));
+      await getRedis().setEx(cacheKey, PREF_TTL, JSON.stringify(preferences));
     }
 
     return preferences;
@@ -33,61 +33,36 @@ export async function getUserPreferences(userId) {
 
 async function generateUserPreferences(userId) {
   try {
-    const userDocs = await User.aggregate([
-      { $match: { _id: userId } },
-      {
-        $lookup: {
-          from: 'documents',
-          localField: '_id',
-          foreignField: 'userId',
-          as: 'uploadedDocs'
-        }
-      },
-      {
-        $project: {
-          preferredCategories: {
-            $ifNull: [
-              {
-                $reduce: {
-                  input: '$uploadedDocs',
-                  initialValue: [],
-                  in: {
-                    $concatArrays: [
-                      '$$value',
-                      ['$$this.category']
-                    ]
-                  }
-                }
-              },
-              []
-            ]
-          },
-          docCount: { $size: '$uploadedDocs' }
-        }
-      }
-    ]);
-
-    if (userDocs.length === 0) {
+    if (!mongoose.isValidObjectId(userId)) {
       return getDefaultPreferences();
     }
 
-    const userData = userDocs[0];
-    
-    const categoryCounts = {};
-    userData.preferredCategories.forEach(category => {
-      categoryCounts[category] = (categoryCounts[category] || 0) + 1;
-    });
+    // Group the user's own documents by category. This used to start from the
+    // users collection and $lookup every uploaded document just to count them,
+    // with a $match that compared a string id against an ObjectId and so never
+    // matched anything.
+    const byCategory = await Document.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]);
 
-    const preferredCategories = Object.entries(categoryCounts)
-      .sort(([,a], [,b]) => b - a)
+    const docCount = byCategory.reduce((sum, c) => sum + c.count, 0);
+
+    if (docCount === 0) {
+      return getDefaultPreferences();
+    }
+
+    const preferredCategories = byCategory
       .slice(0, 3)
-      .map(([category]) => category);
+      .map((c) => c._id)
+      .filter(Boolean);
 
     return {
-      preferredCategories: preferredCategories.length > 0 
-        ? preferredCategories 
+      preferredCategories: preferredCategories.length > 0
+        ? preferredCategories
         : ['technology', 'business', 'education'],
-      docCount: userData.docCount,
+      docCount,
       lastUpdated: new Date()
     };
   } catch (error) {
@@ -106,9 +81,9 @@ function getDefaultPreferences() {
 
 export async function updateUserPreferences(userId, interactions) {
   try {
-    if (redisClient) {
+    if (getRedis()) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;
-      await redisClient.del(cacheKey);
+      await getRedis().del(cacheKey);
     }
 
     // In production, this would update preferences based on user interactions

@@ -19,23 +19,65 @@ export const processDocumentQueue = new Queue(
   redisConfig
 );
 
+export const PROCESS_JOB_OPTIONS = {
+  attempts: 3,
+  backoff: {
+    type: "exponential",
+    delay: 5000,
+  },
+  // The job record is removed once it settles, which frees the stable jobId
+  // below for the next retry. Status and processingError live on the Document,
+  // so nothing useful is lost with the job record.
+  removeOnComplete: true,
+  removeOnFail: true,
+};
+
+/**
+ * Single place that knows how a document gets queued, so the upload flow and
+ * the manual reprocess flow can never drift apart on retry settings.
+ *
+ * The stable jobId makes enqueueing idempotent while a job for this document is
+ * still live: a double-clicked retry cannot start two workers on the same file.
+ */
+export function enqueueProcessing(documentId, s3Key) {
+  return processDocumentQueue.add(
+    "process-document",
+    { documentId: String(documentId), s3Key },
+    { ...PROCESS_JOB_OPTIONS, jobId: `process-${documentId}` }
+  );
+}
+
 processDocumentQueue.process("process-document", async (job) => {
   const { documentId, s3Key } = job.data;
 
-  logger.info(`Starting processing for document: ${documentId}`);
+  // attemptsMade is 0 on the first run, so the last attempt is the one where
+  // attemptsMade has reached attempts - 1.
+  const maxAttempts = job.opts?.attempts || 1;
+  const isFinalAttempt = job.attemptsMade >= maxAttempts - 1;
+
+  logger.info(
+    `Starting processing for document: ${documentId} (attempt ${
+      job.attemptsMade + 1
+    }/${maxAttempts})`
+  );
 
   try {
-    await processDocument(documentId, s3Key, (progress) => {
-      try {
-        const io = getSocketIO();
-        io.to(`document_${documentId}`).emit("processing-progress", {
-          documentId,
-          ...progress,
-        });
-      } catch (err) {
-        logger.warn("Failed to emit progress socket event:", err);
-      }
-    });
+    await processDocument(
+      documentId,
+      s3Key,
+      (progress) => {
+        try {
+          const io = getSocketIO();
+          io.to(`document_${documentId}`).emit("processing-progress", {
+            documentId,
+            ...progress,
+          });
+        } catch (err) {
+          logger.warn("Failed to emit progress socket event:", err);
+        }
+      },
+      { isFinalAttempt }
+    );
 
     // Emit final success event
     try {
@@ -56,10 +98,26 @@ processDocumentQueue.process("process-document", async (job) => {
   } catch (error) {
     logger.error(`Failed to process document ${documentId}:`, error);
 
-    await Document.findByIdAndUpdate(documentId, {
-      status: "failed",
-      processingError: error.message,
-    });
+    if (isFinalAttempt) {
+      // processDocument already persisted the failure; this is the belt to its
+      // braces for the case where it threw before reaching its own catch.
+      await Document.findByIdAndUpdate(documentId, {
+        status: "failed",
+        processingError: error.message,
+      });
+
+      try {
+        const io = getSocketIO();
+        io.to(`document_${documentId}`).emit("processing-progress", {
+          documentId,
+          step: "failed",
+          message: error.message,
+          failed: true,
+        });
+      } catch (err) {
+        logger.warn("Failed to emit failure socket event:", err);
+      }
+    }
 
     throw error;
   }

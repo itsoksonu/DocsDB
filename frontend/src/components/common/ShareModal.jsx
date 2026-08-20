@@ -12,7 +12,7 @@ export const ShareModal = ({ isOpen, onClose, document: doc }) => {
   if (!isOpen) return null;
 
   const handleCopyLink = () => {
-    const shareUrl = `${window.location.origin}/document/${doc._id}`;
+    const shareUrl = `${window.location.origin}/document/${doc.slug || doc._id}`;
     navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     toast.success("Link copied!");
@@ -20,7 +20,7 @@ export const ShareModal = ({ isOpen, onClose, document: doc }) => {
   };
 
   const handleNativeShare = async () => {
-    const shareUrl = `${window.location.origin}/document/${doc._id}`;
+    const shareUrl = `${window.location.origin}/document/${doc.slug || doc._id}`;
     if (navigator.share) {
       try {
         await navigator.share({
@@ -187,7 +187,7 @@ export const ShareModal = ({ isOpen, onClose, document: doc }) => {
           <div className="w-full max-w-[300px] relative">
             <div className="bg-dark-900 border border-dark-700 rounded-lg flex items-center p-1 pl-3 h-9">
               <span className="text-dark-400 text-[10px] truncate flex-1">
-                {`${window.location.origin}/document/${doc._id}`}
+                {`${window.location.origin}/document/${doc.slug || doc._id}`}
               </span>
               <button
                 onClick={handleCopyLink}

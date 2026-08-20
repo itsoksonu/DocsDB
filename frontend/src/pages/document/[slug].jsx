@@ -17,7 +17,6 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
-  Maximize2,
   Flag,
 } from "../../icons";
 import toast from "react-hot-toast";
@@ -25,14 +24,9 @@ import Footer from "../../components/layout/Footer";
 import { DocumentCard } from "../../components/common/DocumentCard";
 import { CollectionModal } from "../../components/common/CollectionModal";
 import { ShareModal } from "../../components/common/ShareModal";
-import dynamic from "next/dynamic";
+import { DocumentViewer } from "../../components/ui/DocumentViewer";
 import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
 import axios from "axios";
-
-const PDFViewer = dynamic(
-  () => import("../../components/ui/PDFViewer").then((m) => m.PDFViewer),
-  { ssr: false, loading: () => <div className="w-full h-full flex items-center justify-center bg-dark-800"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" /></div> }
-);
 
 const DocumentViewerPage = ({
   initialDocument,
@@ -41,7 +35,7 @@ const DocumentViewerPage = ({
   error: serverError,
 }) => {
   const router = useRouter();
-  const { id } = router.query;
+  const { slug } = router.query;
   const { user } = useAuth();
 
   const [document, setDocument] = useState(initialDocument);
@@ -52,16 +46,10 @@ const DocumentViewerPage = ({
   const [isSaving, setIsSaving] = useState(false);
   const [relatedDocs, setRelatedDocs] = useState(initialRelatedDocs || []);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
-  const [csvData, setCsvData] = useState([]);
-  const [csvLoading, setCsvLoading] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
 
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 1024);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
+  // Every API call keys off the document's own id once it is loaded, so a
+  // request never depends on whether the visitor arrived by slug or by id.
+  const documentId = document?._id || slug;
 
   // Sync state with props if they change (e.g. shallow routing)
   useEffect(() => {
@@ -76,22 +64,19 @@ const DocumentViewerPage = ({
     if (document && user) {
       checkSavedStatus();
     }
-    if (document?.fileType === "csv" && viewUrl) {
-      fetchCsvContent();
-    }
-  }, [document, user, viewUrl]);
+  }, [document, user]);
 
   // Loading related docs on client if not provided by SSR (fallback)
   useEffect(() => {
-    if (id && !initialRelatedDocs) {
+    if (documentId && !initialRelatedDocs) {
       loadRelatedDocuments();
     }
-  }, [id, initialRelatedDocs]);
+  }, [documentId, initialRelatedDocs]);
 
   const loadRelatedDocuments = async () => {
     try {
-      if (!id) return;
-      const response = await apiService.getRelatedDocuments(id, 6);
+      if (!documentId) return;
+      const response = await apiService.getRelatedDocuments(documentId, 6);
       const docs = response.data?.data || response.data || [];
       if (Array.isArray(docs)) {
         setRelatedDocs(docs);
@@ -103,34 +88,13 @@ const DocumentViewerPage = ({
     }
   };
 
-  const fetchCsvContent = async () => {
-    try {
-      setCsvLoading(true);
-      const response = await fetch(viewUrl);
-      const text = await response.text();
-
-      // Simple CSV parser (split by newlines, then commas)
-      const rows = text
-        .split("\n")
-        .map((row) => row.split(","))
-        .filter((row) => row.some((cell) => cell.trim() !== ""));
-
-      setCsvData(rows);
-    } catch (error) {
-      console.error("Error fetching CSV:", error);
-      toast.error("Failed to load CSV preview");
-    } finally {
-      setCsvLoading(false);
-    }
-  };
-
   const [showCollectionModal, setShowCollectionModal] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [savedCollectionId, setSavedCollectionId] = useState(null);
 
   const checkSavedStatus = async () => {
     try {
-      const response = await apiService.checkSavedStatus(id);
+      const response = await apiService.checkSavedStatus(documentId);
       setIsSaved(response.data.isSaved);
       setSavedCollectionId(response.data.collectionId || null);
     } catch (error) {
@@ -150,7 +114,7 @@ const DocumentViewerPage = ({
     if (isSaving) return;
     setIsSaving(true);
     try {
-      await apiService.saveDocument(id, collectionId);
+      await apiService.saveDocument(documentId, collectionId);
       setIsSaved(true);
       setSavedCollectionId(collectionId);
       toast.success(collectionId ? "Saved to collection" : "Document saved");
@@ -167,7 +131,7 @@ const DocumentViewerPage = ({
     if (isSaving) return;
     setIsSaving(true);
     try {
-      await apiService.unsaveDocument(id);
+      await apiService.unsaveDocument(documentId);
       setIsSaved(false);
       setSavedCollectionId(null);
       toast.success("Document removed from saved");
@@ -184,7 +148,7 @@ const DocumentViewerPage = ({
       window.open(viewUrl, "_blank");
 
       try {
-        await apiService.trackDownload(id);
+        await apiService.trackDownload(documentId);
         toast.success("Download started");
       } catch (error) {
         console.error("Error tracking download:", error);
@@ -202,129 +166,6 @@ const DocumentViewerPage = ({
       month: "long",
       day: "numeric",
     });
-  };
-
-  const getViewerUrl = () => {
-    if (!viewUrl) return null;
-
-    const type = document.fileType?.toLowerCase();
-    const encodedUrl = encodeURIComponent(viewUrl);
-
-    if (["xlsx", "xls", "doc", "docx", "ppt", "pptx"].includes(type)) {
-      // Office Live doesn't embed on mobile — fall back to Google Docs viewer
-      if (isMobile) {
-        return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
-      }
-      return `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
-    }
-
-    return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
-  };
-
-  // --- Custom CSV Renderer Component ---
-  const renderCsvPreview = () => {
-    if (csvLoading) {
-      return (
-        <div className="w-full h-full flex items-center justify-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-        </div>
-      );
-    }
-
-    if (csvData.length === 0) {
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center text-dark-400 p-6">
-          <FileText size={48} className="mb-4" />
-          <p className="mb-2">No preview data available</p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="w-full h-full overflow-auto bg-white text-black p-4">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="bg-gray-100 border-b border-gray-300">
-              {csvData[0]?.map((header, i) => (
-                <th
-                  key={i}
-                  className="p-2 text-left font-semibold border-r border-gray-200 min-w-[100px]"
-                >
-                  {header}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {csvData.slice(1).map((row, rowIndex) => (
-              <tr
-                key={rowIndex}
-                className="border-b border-gray-100 hover:bg-blue-50"
-              >
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    className="p-2 border-r border-gray-100 truncate max-w-[200px]"
-                    title={cell}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  };
-
-  const renderViewer = () => {
-    const type = document.fileType?.toLowerCase();
-
-    // 1. Handle CSV natively
-    if (type === "csv") {
-      return renderCsvPreview();
-    }
-
-    // 2. Handle PDFs with react-pdf (works on all devices, no page/size limit)
-    if (type === "pdf" && viewUrl) {
-      return <PDFViewer url={viewUrl} onFullScreen={handleFullScreen} />;
-    }
-
-    // 3. Handle Office files and others via iframe
-    const viewerSrc = getViewerUrl();
-
-    if (!viewerSrc) {
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center text-dark-400 p-6">
-          <FileText size={48} className="mb-4" />
-          <p className="mb-2 text-lg font-semibold">Preview not available</p>
-          <button
-            onClick={handleDownload}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
-          >
-            <Download size={16} />
-            Download to view
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <iframe
-        src={viewerSrc}
-        className="w-full h-full bg-white"
-        title={document.generatedTitle}
-        frameBorder="0"
-        allowFullScreen
-      />
-    );
-  };
-
-  const handleFullScreen = () => {
-    if (viewUrl) {
-      window.open(viewUrl, "_blank");
-    }
   };
 
   if (loading) {
@@ -363,8 +204,8 @@ const DocumentViewerPage = ({
   }
 
   // SEO Helpers
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://docsdb.com";
-  const canonicalUrl = `${siteUrl}/document/${document._id}`;
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://docsdb.in";
+  const canonicalUrl = `${siteUrl}/document/${document.slug || document._id}`;
   const imageUrl =
     document.thumbnailUrl || `${siteUrl}/assets/og-placeholder.png`; // Fallback image
 
@@ -496,7 +337,7 @@ const DocumentViewerPage = ({
                       </button>
                     </div>
                     <button
-                      onClick={() => router.push(`/report/${id}`)}
+                      onClick={() => router.push(`/report/${documentId}`)}
                       className="flex items-center justify-center gap-2 px-4 py-2 bg-transparent hover:bg-dark-800 text-dark-400 hover:text-red-400 border border-dark-800/50 hover:border-dark-700/50 rounded-lg transition-colors text-sm w-full"
                     >
                       <Flag size={16} />
@@ -610,21 +451,14 @@ const DocumentViewerPage = ({
 
               {/* Middle Column - Document Viewer */}
               <div className="lg:col-span-6">
-                <div className="bg-dark-900/50 backdrop-blur-sm rounded-xl border border-dark-800/50 overflow-hidden sticky top-24 group">
-                  {/* Top Action Bar for Viewer */}
-                  <div className="absolute top-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={handleFullScreen}
-                      className="bg-dark-900/80 p-2 rounded-lg text-white hover:bg-blue-600 transition-colors backdrop-blur-sm border border-dark-700 shadow-lg"
-                      title="Open in new tab"
-                    >
-                      <Maximize2 size={20} />
-                    </button>
-                  </div>
-
-                  <div className="aspect-[8.5/11] w-full bg-dark-800">
-                    {renderViewer()}
-                  </div>
+                {/* sticky only from lg up: on mobile the single-column stack
+                    made the viewer stick against the navbar padding. */}
+                <div className="lg:sticky lg:top-24">
+                  <DocumentViewer
+                    document={document}
+                    viewUrl={viewUrl}
+                    onDownload={handleDownload}
+                  />
                 </div>
               </div>
 
@@ -664,16 +498,23 @@ const DocumentViewerPage = ({
   );
 };
 
+const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
+
 export async function getServerSideProps(context) {
-  const { id } = context.params;
+  const { slug } = context.params;
   const apiUrl =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
+
+  // The route segment is a slug or an id; anything else never reaches the API.
+  if (!/^[a-z0-9][a-z0-9-]{0,119}$/i.test(String(slug || ""))) {
+    return { notFound: true };
+  }
 
   try {
     // 1. Fetch document view data (includes doc details and viewUrl)
     // Note: We're not passing auth token here, so only public documents will be fetched.
     // If the document is private, the backend should return 403 or 404, which we handle.
-    const viewResponse = await axios.get(`${apiUrl}/documents/${id}/view`);
+    const viewResponse = await axios.get(`${apiUrl}/documents/${slug}/view`);
 
     if (!viewResponse.data?.success) {
       return { notFound: true };
@@ -681,12 +522,24 @@ export async function getServerSideProps(context) {
 
     const { document, viewUrl } = viewResponse.data.data;
 
+    // Old id-based links keep working, but they redirect once so search
+    // engines and shares consolidate on the slug rather than indexing both.
+    if (OBJECT_ID_PATTERN.test(slug) && document.slug) {
+      return {
+        redirect: {
+          destination: `/document/${document.slug}`,
+          permanent: true,
+        },
+      };
+    }
+
     // 2. Fetch related documents
     let relatedDocs = [];
     try {
-      const relatedResponse = await axios.get(`${apiUrl}/feed/related/${id}`, {
-        params: { limit: 6 },
-      });
+      const relatedResponse = await axios.get(
+        `${apiUrl}/feed/related/${document._id}`,
+        { params: { limit: 6 } },
+      );
       relatedDocs = relatedResponse.data?.data || [];
     } catch (err) {
       console.error("Error fetching related docs for SSR:", err.message);

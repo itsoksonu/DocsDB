@@ -45,6 +45,23 @@ export {
   Trash2,
   MessageSquare,
   Copy,
+  RefreshCw,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  Minimize,
+  RotateCw,
+  AlertTriangle,
+  Clock,
+  HardDrive,
+  Tag,
+  Globe,
+  Lock,
+  Layers,
+  BarChart3,
+  ExternalLink,
+  ArrowLeft,
+  ShieldAlert,
 } from "lucide-react";
 
 export { FaGoogle, FaFacebook, FaGithub } from "react-icons/fa";

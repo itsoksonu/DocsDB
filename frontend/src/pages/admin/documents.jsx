@@ -10,6 +10,8 @@ import {
   Eye,
   ShieldAlert,
   Edit,
+  RefreshCw,
+  BarChart3,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { format } from "date-fns";
@@ -24,6 +26,7 @@ export default function DocumentManagement() {
   const [statusFilter, setStatusFilter] = useState("");
   const [editingDocument, setEditingDocument] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [reprocessing, setReprocessing] = useState(null);
 
   useEffect(() => {
     fetchDocuments();
@@ -73,6 +76,21 @@ export default function DocumentManagement() {
     } catch (error) {
       console.error("Error taking down document:", error);
       toast.error("Failed to take down document");
+    }
+  };
+
+  const handleReprocess = async (documentId) => {
+    setReprocessing(documentId);
+    try {
+      await apiService.reprocessAdminDocument(documentId);
+      toast.success("Queued for reprocessing");
+      fetchDocuments();
+    } catch (error) {
+      toast.error(
+        error.response?.data?.message || "Failed to queue reprocessing",
+      );
+    } finally {
+      setReprocessing(null);
     }
   };
 
@@ -134,6 +152,7 @@ export default function DocumentManagement() {
             <option value="processing">Processing</option>
             <option value="failed">Failed</option>
             <option value="taken_down">Taken Down</option>
+            <option value="duplicate">Duplicate</option>
           </select>
         </div>
 
@@ -177,13 +196,25 @@ export default function DocumentManagement() {
                       className="hover:bg-dark-800/50 transition-colors"
                     >
                       <td className="px-6 py-4 max-w-sm">
-                        <div className="flex items-start gap-3">
-                          <div className="p-2 bg-dark-800 rounded-lg text-blue-400">
-                            <FileText size={20} />
-                          </div>
+                        <Link
+                          href={`/admin/documents/${doc._id}`}
+                          className="flex items-start gap-3 group"
+                        >
+                          {doc.thumbnailUrl ? (
+                            <img
+                              src={doc.thumbnailUrl}
+                              alt=""
+                              className="w-10 h-12 object-cover rounded border border-dark-800 bg-dark-800 flex-shrink-0"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="w-10 h-12 bg-dark-800 rounded text-blue-400 flex items-center justify-center flex-shrink-0">
+                              <FileText size={18} />
+                            </div>
+                          )}
                           <div className="min-w-0">
                             <p
-                              className="font-medium text-dark-200 truncate"
+                              className="font-medium text-dark-200 group-hover:text-blue-400 transition-colors truncate"
                               title={doc.generatedTitle || doc.originalFilename}
                             >
                               {doc.generatedTitle || doc.originalFilename}
@@ -191,8 +222,16 @@ export default function DocumentManagement() {
                             <p className="text-xs text-dark-500 uppercase">
                               {doc.fileType}
                             </p>
+                            {doc.processingError && (
+                              <p
+                                className="text-xs text-red-400/80 truncate mt-0.5"
+                                title={doc.processingError}
+                              >
+                                {doc.processingError}
+                              </p>
+                            )}
                           </div>
-                        </div>
+                        </Link>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
@@ -229,13 +268,35 @@ export default function DocumentManagement() {
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <Link
-                            href={`/document/${doc._id}`}
+                            href={`/admin/documents/${doc._id}`}
+                            className="p-2 text-dark-400 hover:text-blue-400 hover:bg-blue-400/10 rounded-lg transition-colors"
+                            title="Details & insights"
+                          >
+                            <BarChart3 size={18} />
+                          </Link>
+                          <Link
+                            href={`/document/${doc.slug || doc._id}`}
                             target="_blank"
                             className="p-2 text-dark-400 hover:text-blue-400 hover:bg-blue-400/10 rounded-lg transition-colors"
                             title="View Document"
                           >
                             <ExternalLink size={18} />
                           </Link>
+                          {doc.status === "failed" && (
+                            <button
+                              onClick={() => handleReprocess(doc._id)}
+                              disabled={reprocessing === doc._id}
+                              className="p-2 text-dark-400 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition-colors disabled:opacity-40"
+                              title="Retry processing"
+                            >
+                              <RefreshCw
+                                size={18}
+                                className={
+                                  reprocessing === doc._id ? "animate-spin" : ""
+                                }
+                              />
+                            </button>
+                          )}
                           <button
                             onClick={() => handleEdit(doc)}
                             className="p-2 text-dark-400 hover:text-emerald-400 hover:bg-emerald-400/10 rounded-lg transition-colors"

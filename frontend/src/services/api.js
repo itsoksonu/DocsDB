@@ -198,6 +198,22 @@ class APIService {
     return response.data;
   }
 
+  // Structured content for the in-app viewer (docx paragraphs, pptx slides,
+  // xlsx/csv rows). PDFs render from the signed URL and never call this.
+  async getDocumentPreview(identifier) {
+    const response = await this.client.get(`/documents/${identifier}/preview`);
+    return response.data;
+  }
+
+  // Re-runs processing on a document that already exists in storage. Used by
+  // the retry affordances instead of uploading the same file a second time.
+  async reprocessDocument(documentId) {
+    const response = await this.client.post(
+      `/documents/${documentId}/reprocess`
+    );
+    return response.data;
+  }
+
   // Feed endpoints
   async getFeed(params = {}) {
     const response = await this.client.get("/feed", { params });
@@ -357,10 +373,63 @@ class APIService {
     return response.data;
   }
 
+  // AI provider configuration
+  async getAiSettings() {
+    const response = await this.client.get("/admin/ai/settings");
+    return response.data;
+  }
+
+  async updateAiSettings(data) {
+    const response = await this.client.patch("/admin/ai/settings", data);
+    return response.data;
+  }
+
+  async testAiProvider(provider, model) {
+    const response = await this.client.post("/admin/ai/test", {
+      provider,
+      model,
+    });
+    return response.data;
+  }
+
+  async testAllAiProviders() {
+    const response = await this.client.post("/admin/ai/test-all");
+    return response.data;
+  }
+
+  async getAdminDocument(documentId, params = {}) {
+    const response = await this.client.get(`/admin/documents/${documentId}`, {
+      params,
+    });
+    return response.data;
+  }
+
   async takedownDocument(documentId, data) {
     const response = await this.client.post(
       `/admin/documents/${documentId}/takedown`,
       data,
+    );
+    return response.data;
+  }
+
+  async restoreAdminDocument(documentId, data = {}) {
+    const response = await this.client.post(
+      `/admin/documents/${documentId}/restore`,
+      data,
+    );
+    return response.data;
+  }
+
+  async reprocessAdminDocument(documentId) {
+    const response = await this.client.post(
+      `/admin/documents/${documentId}/reprocess`,
+    );
+    return response.data;
+  }
+
+  async regenerateAdminThumbnail(documentId) {
+    const response = await this.client.post(
+      `/admin/documents/${documentId}/thumbnail`,
     );
     return response.data;
   }

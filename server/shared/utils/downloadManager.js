@@ -1,5 +1,5 @@
 import Document from '../models/Document.js';
-import databaseManager from '../database/connection.js';
+import { getRedis } from './redis.js';
 import { getSponsoredDocuments } from './adManager.js';
 import logger from './logger.js';
 
@@ -7,7 +7,6 @@ const DOWNLOAD_SESSION_TTL = 1800; // 30 minutes
 const DOWNLOAD_TIMER_DURATION = 10000; // 10 seconds
 const MAX_DOWNLOADS_PER_HOUR = 10;
 
-const redisClient = databaseManager.getRedisClient();
 
 export async function validateDownloadRequest(documentId, userId, userIp) {
   try {
@@ -86,8 +85,8 @@ export async function createDownloadSession({ documentId, userId, userIp, userAg
       sessionData.timerDuration = 0;
     }
 
-    if (redisClient) {
-      await redisClient.setEx(
+    if (getRedis()) {
+      await getRedis().setEx(
         `download:session:${sessionId}`, 
         DOWNLOAD_SESSION_TTL, 
         JSON.stringify(sessionData)
@@ -107,12 +106,12 @@ export async function createDownloadSession({ documentId, userId, userIp, userAg
 
 export async function completeDownloadSession(sessionId, userId, adCompleted = false) {
   try {
-    if (!redisClient) {
+    if (!getRedis()) {
       return { valid: false, message: 'Session storage unavailable' };
     }
 
     const sessionKey = `download:session:${sessionId}`;
-    const sessionData = await redisClient.get(sessionKey);
+    const sessionData = await getRedis().get(sessionKey);
     
     if (!sessionData) {
       return { valid: false, message: 'Download session expired or invalid' };
@@ -144,7 +143,7 @@ export async function completeDownloadSession(sessionId, userId, adCompleted = f
     session.completed = true;
     session.completedAt = now;
     
-    await redisClient.setEx(sessionKey, 300, JSON.stringify(session)); // Keep for 5 more minutes
+    await getRedis().setEx(sessionKey, 300, JSON.stringify(session)); // Keep for 5 more minutes
 
     await recordDownloadCompletion(session.documentId, userId, session.userIp);
 
@@ -193,7 +192,7 @@ export async function getAdForDownload(userId) {
 // Helper functions
 async function checkDownloadLimits(userId, userIp) {
   try {
-    if (!redisClient) {
+    if (!getRedis()) {
       return { allowed: true };
     }
 
@@ -231,20 +230,20 @@ async function checkDownloadLimits(userId, userIp) {
 }
 
 async function getRecentDownloadsCount(key, windowMs) {
-  if (!redisClient) return 0;
+  if (!getRedis()) return 0;
 
   try {
     const now = Date.now();
-    const downloads = await redisClient.lRange(key, 0, -1);
+    const downloads = await getRedis().lRange(key, 0, -1);
     
     const recentDownloads = downloads.filter(timestamp => {
       return now - parseInt(timestamp) <= windowMs;
     });
 
     if (downloads.length !== recentDownloads.length) {
-      await redisClient.del(key);
+      await getRedis().del(key);
       if (recentDownloads.length > 0) {
-        await redisClient.rPush(key, recentDownloads);
+        await getRedis().rPush(key, recentDownloads);
       }
     }
 
@@ -256,22 +255,22 @@ async function getRecentDownloadsCount(key, windowMs) {
 }
 
 async function recordDownloadAttempt(key, timestamp) {
-  if (!redisClient) return;
+  if (!getRedis()) return;
 
   try {
-    await redisClient.rPush(key, timestamp.toString());
-    await redisClient.expire(key, 24 * 60 * 60);
+    await getRedis().rPush(key, timestamp.toString());
+    await getRedis().expire(key, 24 * 60 * 60);
   } catch (error) {
     logger.error('Error recording download attempt:', error);
   }
 }
 
 async function checkRecentDownload(documentId, userId) {
-  if (!redisClient) return false;
+  if (!getRedis()) return false;
 
   try {
     const key = `download:recent:${userId}:${documentId}`;
-    const recent = await redisClient.get(key);
+    const recent = await getRedis().get(key);
     return !!recent;
   } catch (error) {
     logger.error('Error checking recent download:', error);
@@ -280,15 +279,15 @@ async function checkRecentDownload(documentId, userId) {
 }
 
 async function recordDownloadCompletion(documentId, userId, userIp) {
-  if (!redisClient) return;
+  if (!getRedis()) return;
 
   try {
     const recentKey = `download:recent:${userId}:${documentId}`;
-    await redisClient.setEx(recentKey, 3600, '1'); // 1 hour TTL
+    await getRedis().setEx(recentKey, 3600, '1'); // 1 hour TTL
 
     const analyticsKey = `analytics:downloads:${documentId}`;
-    await redisClient.incr(analyticsKey);
-    await redisClient.expire(analyticsKey, 7 * 24 * 60 * 60); // 7 days TTL
+    await getRedis().incr(analyticsKey);
+    await getRedis().expire(analyticsKey, 7 * 24 * 60 * 60); // 7 days TTL
 
     logger.info(`Download completed: user ${userId} downloaded document ${documentId}`);
   } catch (error) {
@@ -308,21 +307,21 @@ function generateSessionId() {
 
 // Clean up expired sessions (cron job)
 export async function cleanupExpiredSessions() {
-  if (!redisClient) return;
+  if (!getRedis()) return;
 
   try {
     // This would be more efficient with Redis TTL, but we'll check periodically
-    const sessionKeys = await redisClient.keys('download:session:*');
+    const sessionKeys = await getRedis().keys('download:session:*');
     const now = Date.now();
     
     let cleaned = 0;
     
     for (const key of sessionKeys) {
-      const sessionData = await redisClient.get(key);
+      const sessionData = await getRedis().get(key);
       if (sessionData) {
         const session = JSON.parse(sessionData);
         if (session.expiresAt < now) {
-          await redisClient.del(key);
+          await getRedis().del(key);
           cleaned++;
         }
       }

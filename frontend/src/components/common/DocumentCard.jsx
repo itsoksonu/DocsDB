@@ -13,6 +13,10 @@ import {
   Share2,
   BookmarkCheck,
   Trash2,
+  RefreshCw,
+  AlertTriangle,
+  Loader2,
+  Copy,
 } from "../../icons";
 import { Dropdown, DropdownItem } from "../ui/Dropdown";
 import { apiService } from "../../services/api";
@@ -22,9 +26,11 @@ import { Modal } from "../ui/Modal";
 import { ShareModal } from "./ShareModal";
 import { CollectionModal } from "./CollectionModal";
 
-export const DocumentCard = ({ document }) => {
+export const DocumentCard = ({ document, onUpdate }) => {
   const { user } = useAuth();
   const router = useRouter();
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [statusOverride, setStatusOverride] = useState(null);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
@@ -56,6 +62,10 @@ export const DocumentCard = ({ document }) => {
     }
   };
 
+  // Slug when the document has one, id for anything not yet backfilled.
+  const documentHref = document.slug || document._id;
+  const status = statusOverride || document.status;
+
   const handleCardClick = (e) => {
     if (
       e.target.closest(".dropdown-trigger") ||
@@ -63,7 +73,45 @@ export const DocumentCard = ({ document }) => {
     ) {
       return;
     }
-    router.push(`/document/${document._id}`);
+    // A document that never finished processing has no viewer page to show.
+    if (status && status !== "processed") {
+      if (status === "duplicate" && document.duplicateOf) {
+        // Send them to the copy they already have rather than a dead end.
+        router.push(`/document/${document.duplicateOf}`);
+        return;
+      }
+
+      toast(
+        status === "failed"
+          ? "This document failed to process. Retry it from the menu."
+          : status === "duplicate"
+            ? "You already uploaded this file."
+            : "This document is still being processed."
+      );
+      return;
+    }
+    router.push(`/document/${documentHref}`);
+  };
+
+  const handleRetry = async (e) => {
+    e.stopPropagation();
+    setIsDropdownOpen(false);
+    setIsRetrying(true);
+
+    try {
+      await apiService.reprocessDocument(document._id);
+      toast.success("Queued for reprocessing");
+      // The parent owns a cursor-paginated list and may not refetch, so the
+      // card reflects the new state itself.
+      setStatusOverride("processing");
+      onUpdate?.();
+    } catch (error) {
+      toast.error(
+        error.response?.data?.message || "Could not retry this document"
+      );
+    } finally {
+      setIsRetrying(false);
+    }
   };
 
   const handleSaveToggle = async (e) => {
@@ -241,6 +289,48 @@ export const DocumentCard = ({ document }) => {
                 {document.fileType}
               </div>
             )}
+
+            {/* Processing state. Only owners ever see a non-processed card. */}
+            {status === "failed" && (
+              <div className="absolute inset-0 bg-dark-900/85 flex flex-col items-center justify-center gap-1.5 text-center px-2">
+                <AlertTriangle size={18} className="text-red-400" />
+                <span className="text-[10px] text-red-300 leading-tight">
+                  Processing failed
+                </span>
+                {isOwner && (
+                  <button
+                    onClick={handleRetry}
+                    disabled={isRetrying}
+                    className="mt-1 flex items-center gap-1 px-2 py-1 text-[10px] font-medium bg-dark-700 hover:bg-dark-600 text-white rounded transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      size={10}
+                      className={isRetrying ? "animate-spin" : ""}
+                    />
+                    {isRetrying ? "Retrying" : "Retry"}
+                  </button>
+                )}
+              </div>
+            )}
+            {status === "duplicate" && (
+              <div className="absolute inset-0 bg-dark-900/85 flex flex-col items-center justify-center gap-1.5 text-center px-2">
+                <Copy size={18} className="text-purple-400" />
+                <span className="text-[10px] text-purple-300 leading-tight">
+                  Duplicate
+                </span>
+                <span className="text-[9px] text-dark-400 leading-tight">
+                  Already in your library
+                </span>
+              </div>
+            )}
+            {(status === "processing" || status === "uploaded") && (
+              <div className="absolute inset-0 bg-dark-900/85 flex flex-col items-center justify-center gap-1.5 text-center px-2">
+                <Loader2 size={18} className="text-blue-400 animate-spin" />
+                <span className="text-[10px] text-dark-300 leading-tight">
+                  Processing
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Content */}
@@ -341,6 +431,16 @@ export const DocumentCard = ({ document }) => {
                       {isOwner && (
                         <>
                           <div className="border-t border-dark-600" />
+                          {status === "failed" && (
+                            <DropdownItem
+                              icon={RefreshCw}
+                              label={
+                                isRetrying ? "Retrying..." : "Retry processing"
+                              }
+                              onClick={handleRetry}
+                              disabled={isRetrying}
+                            />
+                          )}
                           <DropdownItem
                             icon={Trash2}
                             label="Delete"

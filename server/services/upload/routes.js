@@ -4,7 +4,7 @@ import { authMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import S3Manager from "../../shared/utils/s3.js";
 import Document from "../../shared/models/Document.js";
-import { processDocumentQueue } from "../../shared/queues/processQueue.js";
+import { enqueueProcessing } from "../../shared/queues/processQueue.js";
 
 const router = express.Router();
 
@@ -128,22 +128,20 @@ router.post(
       }
 
       document.status = "processing";
+      document.processingStartedAt = new Date();
       await document.save();
 
-      await processDocumentQueue.add(
-        "process-document",
-        {
-          documentId: document._id.toString(),
-          s3Key: key,
-        },
-        {
-          attempts: 3,
-          backoff: {
-            type: "exponential",
-            delay: 5000,
-          },
-        }
-      );
+      try {
+        await enqueueProcessing(document._id, key);
+      } catch (error) {
+        // Without this the document sits at "processing" forever, with no job
+        // to move it and no retry affordance in the UI.
+        document.status = "failed";
+        document.processingError =
+          "Could not queue the document for processing. Please retry.";
+        await document.save();
+        throw error;
+      }
 
       res.json({
         success: true,

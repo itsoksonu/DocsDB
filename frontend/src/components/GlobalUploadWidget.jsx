@@ -7,6 +7,7 @@ import {
   Check,
   AlertCircle,
   Maximize2,
+  RefreshCw,
 } from "../icons";
 import { useUpload } from "../contexts/UploadContext";
 import { apiService } from "../services/api";
@@ -14,7 +15,7 @@ import toast from "react-hot-toast";
 
 export default function GlobalUploadWidget() {
   const router = useRouter();
-  const { uploads, isMinimized, setIsMinimized, updateUpload, resetUploads } = useUpload();
+  const { uploads, isMinimized, setIsMinimized, updateUpload, resetUploads, retryUpload } = useUpload();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const socketRef = useRef(null);
   const joinedRoomsRef = useRef(new Set());
@@ -101,6 +102,14 @@ export default function GlobalUploadWidget() {
             response.data.data || response.data;
           if (status === "processed") {
             handleProgressUpdate({ documentId: u.documentId, completed: true });
+          } else if (status === "duplicate") {
+            // Not a failure: the user already had this exact file, so there is
+            // nothing to retry and nothing went wrong.
+            updateUpload(u.id, {
+              status: "duplicate",
+              progress: 100,
+              errorMessage: "",
+            });
           } else if (status === "failed") {
             updateUpload(u.id, {
               status: "error",
@@ -122,7 +131,10 @@ export default function GlobalUploadWidget() {
   useEffect(() => {
     if (uploads.length === 0) return;
     const allDone = uploads.every(
-      (u) => u.status === "processed" || u.status === "error"
+      (u) =>
+        u.status === "processed" ||
+        u.status === "duplicate" ||
+        u.status === "error"
     );
     const anySuccess = uploads.some((u) => u.status === "processed");
     if (allDone && anySuccess) {
@@ -162,7 +174,10 @@ export default function GlobalUploadWidget() {
         )
       : 0;
   const allDone = activeUploads.every(
-    (u) => u.status === "processed" || u.status === "error"
+    (u) =>
+        u.status === "processed" ||
+        u.status === "duplicate" ||
+        u.status === "error"
   );
   const anyError = activeUploads.some((u) => u.status === "error");
 
@@ -290,6 +305,8 @@ export default function GlobalUploadWidget() {
               <span className="flex-shrink-0">
                 {u.status === "processed" ? (
                   <Check size={14} className="text-green-500" />
+                ) : u.status === "duplicate" ? (
+                  <Check size={14} className="text-purple-400" />
                 ) : u.status === "error" ? (
                   <AlertCircle size={14} className="text-red-500" />
                 ) : (
@@ -307,8 +324,31 @@ export default function GlobalUploadWidget() {
                 />
               </div>
             )}
+            {u.status === "duplicate" && (
+              <p className="text-xs text-purple-300">
+                You already uploaded this file — nothing new was added.
+              </p>
+            )}
             {u.status === "error" && (
-              <p className="text-xs text-red-400">{u.errorMessage}</p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-xs text-red-400 flex-1">{u.errorMessage}</p>
+                <button
+                  onClick={() => retryUpload(u.id)}
+                  disabled={u.retrying}
+                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-dark-700 hover:bg-dark-600 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  title={
+                    u.storedInS3
+                      ? "Process this file again without re-uploading"
+                      : "Upload this file again"
+                  }
+                >
+                  <RefreshCw
+                    size={11}
+                    className={u.retrying ? "animate-spin" : ""}
+                  />
+                  {u.retrying ? "Retrying" : "Retry"}
+                </button>
+              </div>
             )}
           </div>
         ))}

@@ -1,8 +1,8 @@
 import Earnings from '../models/Earnings.js';
 import Payouts from '../models/Payouts.js';
-import User from '../models/User.js';
+import UserWallet from '../models/UserWallet.js';
 import Document from '../models/Document.js';
-import databaseManager from '../database/connection.js';
+import { getRedis } from './redis.js';
 import logger from './logger.js';
 
 // Monetization rates (in USD)
@@ -16,7 +16,6 @@ const RATES = {
 const MIN_VIEW_DURATION = 3000; // 3 seconds
 const MIN_PAYOUT_AMOUNT = 50; // $50
 
-const redisClient = databaseManager.getRedisClient();
 
 
 // Calculate earnings function
@@ -113,27 +112,40 @@ export async function trackMonetizationEvent(eventType, data) {
 // process payout function
 export async function processPayout(userId, amount) {
   try {
-    const user = await User.findById(userId);
-    if (!user) {
+    const wallet = await UserWallet.findOne({ userId });
+    if (!wallet) {
       return { success: false, message: 'User not found' };
     }
 
-    if (user.walletBalance < amount) {
+    if (wallet.balance < amount) {
       return { success: false, message: 'Insufficient balance' };
     }
 
     if (amount < MIN_PAYOUT_AMOUNT) {
-      return { 
-        success: false, 
-        message: `Minimum payout amount is $${MIN_PAYOUT_AMOUNT}` 
+      return {
+        success: false,
+        message: `Minimum payout amount is $${MIN_PAYOUT_AMOUNT}`
       };
     }
 
-    if (!user.payoutDetails?.stripeAccountId) {
-      return { 
-        success: false, 
-        message: 'Please set up payout method first' 
+    if (!wallet.payoutDetails?.stripeAccountId) {
+      return {
+        success: false,
+        message: 'Please set up payout method first'
       };
+    }
+
+    // Debit first, and only against a balance that is still sufficient. Two
+    // concurrent payout requests can no longer both pass the check above and
+    // drive the balance negative.
+    const debited = await UserWallet.findOneAndUpdate(
+      { userId, balance: { $gte: amount } },
+      { $inc: { balance: -amount } },
+      { new: true }
+    );
+
+    if (!debited) {
+      return { success: false, message: 'Insufficient balance' };
     }
 
     const payout = new Payouts({
@@ -143,10 +155,13 @@ export async function processPayout(userId, amount) {
       estimatedArrival: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
     });
 
-    await payout.save();
-
-    user.walletBalance -= amount;
-    await user.save();
+    try {
+      await payout.save();
+    } catch (error) {
+      // Give the money back rather than losing it to a failed insert.
+      await UserWallet.updateOne({ userId }, { $inc: { balance: amount } });
+      throw error;
+    }
 
     // In production, this would trigger actual payment processing
     // For now, we'll just create the record
@@ -282,14 +297,16 @@ function generateEventId(eventType, data) {
 }
 
 async function updateWalletBalance(userId, amount) {
-  await User.findByIdAndUpdate(userId, {
-    $inc: { walletBalance: amount }
-  });
+  await UserWallet.updateOne(
+    { userId },
+    { $inc: { balance: amount }, $setOnInsert: { userId } },
+    { upsert: true }
+  );
 }
 
 async function getWalletBalance(userId) {
-  const user = await User.findById(userId).select('walletBalance');
-  return user?.walletBalance || 0;
+  const wallet = await UserWallet.findOne({ userId }).select('balance').lean();
+  return wallet?.balance || 0;
 }
 
 async function getEstimatedEarnings(userId) {
@@ -334,10 +351,10 @@ function getTimeFilter(timeframe) {
 async function isFraudulentEvent(data) {
   const { userId, documentId, ipAddress } = data;
 
-  if (redisClient) {
+  if (getRedis()) {
     const key = `fraud:${userId}:${documentId}:${ipAddress}`;
-    const attempts = await redisClient.incr(key);
-    await redisClient.expire(key, 3600); // 1 hour TTL
+    const attempts = await getRedis().incr(key);
+    await getRedis().expire(key, 3600); // 1 hour TTL
 
     if (attempts > 10) { 
       return true;

@@ -14,8 +14,8 @@ import {
   Users,
   Code,
   Minimize2,
+  RefreshCw,
 } from "../icons";
-import { apiService } from "../services/api";
 import Footer from "../components/layout/Footer";
 import toast from "react-hot-toast";
 
@@ -23,7 +23,17 @@ export default function UploadPage() {
   const { user } = useAuth();
   const router = useRouter();
   const fileInputRef = useRef(null);
-  const { uploads, isMinimized, setIsMinimized, addFiles, updateUpload, removeUpload, resetUploads } = useUpload();
+  const {
+    uploads,
+    isMinimized,
+    setIsMinimized,
+    addFiles,
+    removeUpload,
+    resetUploads,
+    uploadFile,
+    retryUpload,
+    retryAllFailed,
+  } = useUpload();
 
   const [isUploading, setIsUploading] = useState(false);
 
@@ -68,48 +78,6 @@ export default function UploadPage() {
 
   const handleDragOver = (event) => {
     event.preventDefault();
-  };
-
-  const uploadToS3 = (presignedUrl, file, onProgress) => {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.upload.addEventListener("progress", (event) => {
-        if (event.lengthComputable) {
-          onProgress(Math.round((event.loaded / event.total) * 90));
-        }
-      });
-      xhr.addEventListener("load", () => {
-        if (xhr.status === 200) resolve();
-        else reject(new Error("Upload failed"));
-      });
-      xhr.addEventListener("error", () => reject(new Error("Upload failed")));
-      xhr.open("PUT", presignedUrl);
-      xhr.setRequestHeader("Content-Type", file.type);
-      xhr.send(file);
-    });
-  };
-
-  const uploadFile = async (uploadItem) => {
-    const { id, file } = uploadItem;
-    updateUpload(id, { status: "uploading", progress: 0 });
-    try {
-      const presignResponse = await apiService.getPresignedUrl({
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-      });
-      const { uploadUrl, documentId, key } = presignResponse.data;
-      updateUpload(id, { documentId });
-      await uploadToS3(uploadUrl, file, (progress) => updateUpload(id, { progress }));
-      updateUpload(id, { status: "processing", processingStep: "virus-scan" });
-      await apiService.completeUpload({ documentId, key });
-    } catch (error) {
-      updateUpload(id, {
-        status: "error",
-        errorMessage: error.response?.data?.message || "Upload failed. Please try again.",
-      });
-      toast.error(error.response?.data?.message || `${file.name} failed to upload`);
-    }
   };
 
   const handleUploadAll = async () => {
@@ -226,6 +194,9 @@ export default function UploadPage() {
                             {u.status === "processed" && (
                               <Check size={18} className="text-green-500" />
                             )}
+                            {u.status === "duplicate" && (
+                              <Check size={18} className="text-purple-400" />
+                            )}
                             {u.status === "error" && (
                               <AlertCircle size={18} className="text-red-500" />
                             )}
@@ -255,8 +226,29 @@ export default function UploadPage() {
                           </div>
                         )}
 
+                        {u.status === "duplicate" && (
+                          <p className="text-xs text-purple-300">
+                            You already uploaded this file — nothing new was
+                            added.
+                          </p>
+                        )}
                         {u.status === "error" && (
-                          <p className="text-xs text-red-400">{u.errorMessage}</p>
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs text-red-400 flex-1">
+                              {u.errorMessage}
+                            </p>
+                            <button
+                              onClick={() => retryUpload(u.id)}
+                              disabled={u.retrying}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-dark-700 hover:bg-dark-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                            >
+                              <RefreshCw
+                                size={12}
+                                className={u.retrying ? "animate-spin" : ""}
+                              />
+                              {u.retrying ? "Retrying" : "Retry"}
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))}
@@ -314,17 +306,9 @@ export default function UploadPage() {
                   {!hasActiveUploads && uploads.some((u) => u.status === "error") && (
                     <div className="flex gap-3">
                       <button
-                        onClick={() =>
-                          Promise.all(
-                            uploads
-                              .filter((u) => u.status === "error")
-                              .map((u) => {
-                                updateUpload(u.id, { status: "idle", errorMessage: "" });
-                                return Promise.resolve();
-                              })
-                          )
-                        }
-                        className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
+                        onClick={retryAllFailed}
+                        disabled={uploads.some((u) => u.retrying)}
+                        className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Retry Failed
                       </button>

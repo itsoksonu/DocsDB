@@ -93,6 +93,33 @@ class S3Manager {
     }
   }
 
+  // A missing object is an expected answer here, not an error, so this returns
+  // a boolean instead of throwing the way getObjectMetadata does.
+  async objectExists(key) {
+    if (!key) return false;
+
+    try {
+      await this.s3Client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+        })
+      );
+      return true;
+    } catch (error) {
+      if (
+        error.name === "NotFound" ||
+        error.$metadata?.httpStatusCode === 404
+      ) {
+        return false;
+      }
+      // Anything else (permissions, network) is not proof of absence - assume
+      // the object is there and let the worker report the real problem.
+      logger.error(`Could not check S3 object ${key}:`, error);
+      return true;
+    }
+  }
+
   async deleteObject(key) {
     try {
       const command = new DeleteObjectCommand({

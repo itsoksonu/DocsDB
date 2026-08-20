@@ -2,6 +2,8 @@ import express from "express";
 import { body, validationResult } from "express-validator";
 import { OAuth2Client } from "google-auth-library";
 import User from "../../shared/models/User.js";
+import UserAuthProvider from "../../shared/models/UserAuthProvider.js";
+import UserWallet from "../../shared/models/UserWallet.js";
 import JWTManager from "../../shared/utils/jwt.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
@@ -59,48 +61,39 @@ router.post(
       const userName = name || verifiedUserInfo?.name;
       const userAvatar = avatar || verifiedUserInfo?.picture;
 
-      let user = await User.findByOAuthProvider(provider, actualProviderId);
+      const link = await UserAuthProvider.findByProvider(
+        provider,
+        actualProviderId
+      );
+      let user = link ? await User.findById(link.userId) : null;
 
       if (!user) {
         if (userEmail) {
           user = await User.findOne({ email: userEmail });
         }
 
-        if (user) {
-          await user.addAuthProvider({
-            provider,
-            providerId: actualProviderId,
-            accessToken,
-            refreshToken: null,
-          });
-        } else {
+        if (!user) {
           user = new User({
             email: userEmail,
             name: userName,
             avatar: userAvatar,
-            authProviders: [
-              {
-                provider,
-                providerId: actualProviderId,
-                accessToken,
-                refreshToken: null,
-              },
-            ],
           });
 
           await user.save();
         }
-      } else {
-        await user.addAuthProvider({
-          provider,
-          providerId: actualProviderId,
-          accessToken,
-          refreshToken: req.body.refreshToken,
-        });
       }
+
+      await UserAuthProvider.connect(user._id, {
+        provider,
+        providerId: actualProviderId,
+        accessToken,
+        refreshToken: req.body.refreshToken || null,
+      });
 
       user.lastLoginAt = new Date();
       await user.save();
+
+      const wallet = await UserWallet.getOrCreate(user._id);
 
       const tokenPayload = {
         userId: user._id.toString(),
@@ -128,7 +121,7 @@ router.post(
             email: user.email,
             name: user.name,
             role: user.role,
-            kycStatus: user.kycStatus,
+            kycStatus: wallet.kycStatus,
             avatar: user.avatar,
           },
           accessToken: accessTokenJWT,
@@ -163,18 +156,13 @@ async function verifyGoogleToken(accessToken) {
 
 router.get("/providers", authMiddleware, async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.userId).select("authProviders");
+    const links = await UserAuthProvider.find({ userId: req.user.userId })
+      .select("provider connectedAt")
+      .lean();
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const providers = user.authProviders.map((provider) => ({
-      provider: provider.provider,
-      connectedAt: provider.connectedAt,
+    const providers = links.map((link) => ({
+      provider: link.provider,
+      connectedAt: link.connectedAt,
     }));
 
     res.json({

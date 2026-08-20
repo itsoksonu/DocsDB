@@ -1,46 +1,32 @@
-import databaseManager from '../database/connection.js';
+import crypto from 'crypto';
+import DocumentDailyStat, { utcDay } from '../models/DocumentDailyStat.js';
 import Document from '../models/Document.js';
+import { claimEvent, incrementCounter, pendingFor } from './counters.js';
+import { getRedis } from './redis.js';
 import logger from './logger.js';
 
-const VIEW_TRACKING_PREFIX = 'view:track:';
 const VIEW_DURATION_THRESHOLD = 3000; // 3 seconds minimum for monetization
 
-const redisClient = databaseManager.getRedisClient();
+// Anonymous viewers are deduped by IP, which we never store in the clear.
+function viewerKey(userId, ipAddress) {
+  if (userId) return `u:${userId}`;
+  if (!ipAddress) return 'anon';
+  return `i:${crypto.createHash('sha256').update(String(ipAddress)).digest('hex').slice(0, 16)}`;
+}
 
 export async function trackView(documentId, userId, ipAddress) {
   try {
-    const now = Date.now();
-    const viewKey = `${VIEW_TRACKING_PREFIX}${documentId}:${userId}:${now}`;
-
-    const recentViews = await checkRecentViews(documentId, userId, ipAddress);
-    if (recentViews > 0) {
-      logger.debug(`Duplicate view detected for document ${documentId} by user ${userId}`);
-      return;
+    const fresh = await claimEvent('views', documentId, viewerKey(userId, ipAddress));
+    if (!fresh) {
+      logger.debug(`Duplicate view ignored for document ${documentId}`);
+      return false;
     }
 
-    if (redisClient) {
-      await redisClient.setEx(viewKey, 300, '1');
-      
-      const ipKey = `view:ip:${ipAddress}:${documentId}`;
-      await redisClient.setEx(ipKey, 300, '1');
-    }
-
-    Document.findByIdAndUpdate(documentId, {
-      $inc: { viewsCount: 1 }
-    }).catch(error => {
-      logger.error('Error incrementing view count:', error);
-    });
-
-    logViewEvent({
-      documentId,
-      userId,
-      ipAddress,
-      timestamp: new Date(now)
-    });
-
-    logger.info(`View tracked for document ${documentId} by user ${userId}`);
+    await incrementCounter(documentId, 'views');
+    return true;
   } catch (error) {
     logger.error('Error tracking view:', error);
+    return false;
   }
 }
 
@@ -62,30 +48,13 @@ export async function trackViewDuration(documentId, userId, durationMs) {
 
 export async function trackDownload(documentId, userId, ipAddress) {
   try {
-    const downloadKey = `download:${documentId}:${userId}:${Date.now()}`;
-    
-    if (redisClient) {
-      const recentDownloads = await checkRecentDownloads(documentId, userId, ipAddress);
-      if (recentDownloads > 0) {
-        logger.debug(`Duplicate download detected for document ${documentId} by user ${userId}`);
-        return false;
-      }
-
-      await redisClient.setEx(downloadKey, 300, '1');
+    const fresh = await claimEvent('downloads', documentId, viewerKey(userId, ipAddress));
+    if (!fresh) {
+      logger.debug(`Duplicate download ignored for document ${documentId}`);
+      return false;
     }
 
-    await Document.findByIdAndUpdate(documentId, {
-      $inc: { downloadsCount: 1 }
-    });
-
-    logDownloadEvent({
-      documentId,
-      userId,
-      ipAddress,
-      timestamp: new Date()
-    });
-
-    logger.info(`Download tracked for document ${documentId} by user ${userId}`);
+    await incrementCounter(documentId, 'downloads');
     return true;
   } catch (error) {
     logger.error('Error tracking download:', error);
@@ -93,71 +62,61 @@ export async function trackDownload(documentId, userId, ipAddress) {
   }
 }
 
-async function checkRecentViews(documentId, userId, ipAddress) {
-  if (!redisClient) return 0;
-
-  try {
-    // Check user-based views
-    const userPattern = `${VIEW_TRACKING_PREFIX}${documentId}:${userId}:*`;
-    const userViews = await redisClient.keys(userPattern);
-
-    // Check IP-based views for fraud detection
-    const ipPattern = `view:ip:${ipAddress}:${documentId}`;
-    const ipViews = await redisClient.keys(ipPattern);
-
-    return userViews.length + ipViews.length;
-  } catch (error) {
-    logger.error('Error checking recent views:', error);
-    return 0;
-  }
-}
-
-async function checkRecentDownloads(documentId, userId, ipAddress) {
-  if (!redisClient) return 0;
-
-  try {
-    const pattern = `download:${documentId}:${userId}:*`;
-    const downloads = await redisClient.keys(pattern);
-    return downloads.length;
-  } catch (error) {
-    logger.error('Error checking recent downloads:', error);
-    return 0;
-  }
-}
-
-function logViewEvent(eventData) {
-  // In production, this would send to Kafka or similar event stream
-  // For monetization and analytics processing
-  logger.info('View event:', eventData);
-}
-
-function logDownloadEvent(eventData) {
-  // In production, this would send to event stream
-  logger.info('Download event:', eventData);
-}
-
-// Get view statistics for a document
+/**
+ * Real numbers from the daily rollups. This used to return Math.random().
+ * `days` is capped so a hand-typed query string cannot ask for a decade.
+ */
 export async function getDocumentViewStats(documentId, timeframe = '7d') {
   try {
-    const cacheKey = `stats:views:${documentId}:${timeframe}`;
-    
-    if (redisClient) {
-      const cached = await redisClient.get(cacheKey);
+    const days = Math.min(Math.max(parseInt(timeframe, 10) || 7, 1), 365);
+    const cacheKey = `stats:views:${documentId}:${days}d`;
+    const redis = getRedis();
+
+    if (redis) {
+      const cached = await redis.get(cacheKey);
       if (cached) {
         return JSON.parse(cached);
       }
     }
 
-    // Simplified stats - in production, query from analytics database
+    const since = utcDay();
+    since.setUTCDate(since.getUTCDate() - (days - 1));
+
+    const [rows, document, pending] = await Promise.all([
+      DocumentDailyStat.find({ documentId, date: { $gte: since } })
+        .sort({ date: 1 })
+        .lean(),
+      Document.findById(documentId).select('viewsCount downloadsCount').lean(),
+      pendingFor(documentId),
+    ]);
+
+    const byDate = new Map(
+      rows.map((r) => [r.date.toISOString().slice(0, 10), r])
+    );
+
+    const series = [];
+    for (let i = 0; i < days; i += 1) {
+      const day = new Date(since);
+      day.setUTCDate(day.getUTCDate() + i);
+      const key = day.toISOString().slice(0, 10);
+      const row = byDate.get(key);
+      series.push({
+        date: key,
+        views: row?.views || 0,
+        downloads: row?.downloads || 0,
+      });
+    }
+
     const stats = {
-      totalViews: Math.floor(Math.random() * 1000),
-      uniqueViews: Math.floor(Math.random() * 500),
-      averageDuration: Math.floor(Math.random() * 180), // seconds
-      viewsByDay: generateDailyViews(7)
+      totalViews: (document?.viewsCount || 0) + (pending.views || 0),
+      totalDownloads: (document?.downloadsCount || 0) + (pending.downloads || 0),
+      viewsInPeriod: series.reduce((sum, d) => sum + d.views, 0),
+      downloadsInPeriod: series.reduce((sum, d) => sum + d.downloads, 0),
+      viewsByDay: series,
     };
 
-    if (redisClient) {
-      await redisClient.setEx(cacheKey, 900, JSON.stringify(stats)); // 15 minutes cache
+    if (redis) {
+      await redis.setEx(cacheKey, 900, JSON.stringify(stats)); // 15 minutes cache
     }
 
     return stats;
@@ -165,17 +124,4 @@ export async function getDocumentViewStats(documentId, timeframe = '7d') {
     logger.error('Error getting view stats:', error);
     return null;
   }
-}
-
-function generateDailyViews(days) {
-  const result = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    result.push({
-      date: date.toISOString().split('T')[0],
-      views: Math.floor(Math.random() * 50)
-    });
-  }
-  return result;
 }

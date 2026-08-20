@@ -4,15 +4,43 @@ import mongoose from "mongoose";
 import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
+import SavedDocument from "../../shared/models/SavedDocument.js";
+import UserCollection from "../../shared/models/UserCollection.js";
+import { enqueueProcessing } from "../../shared/queues/processQueue.js";
+import { looksLikeObjectId } from "../../shared/utils/slug.js";
+import { releaseStoredFile } from "../../shared/utils/storage.js";
+import {
+  getDocumentPreview,
+  invalidateDocumentPreview,
+} from "../../shared/utils/documentPreview.js";
 import { trackView, trackDownload } from "../../shared/utils/analytics.js";
-import databaseManager from "../../shared/database/connection.js";
+import { getRedis } from "../../shared/utils/redis.js";
 import S3Manager from "../../shared/utils/s3.js";
 import s3 from "../../shared/utils/s3.js";
 import logger from "../../shared/utils/logger.js";
 
 const router = express.Router();
 
-const redisClient = databaseManager.getRedisClient();
+// Statuses a document can be requeued from. Anything else is moderated away or
+// has no file behind it.
+const RETRYABLE_STATUSES = new Set(["failed", "uploaded"]);
+const MAX_MANUAL_RETRIES = 5;
+
+// A worker that dies mid-run leaves the document at "processing" with no job to
+// move it, and nothing ever clears it. Past this age we assume the run is dead
+// and let it be requeued; the job-id de-duplication in enqueueProcessing stops
+// a genuinely live run from being doubled up.
+const STALE_PROCESSING_MS = 30 * 60 * 1000;
+
+function isStuckInProcessing(document) {
+  if (document.status !== "processing") return false;
+
+  const startedAt = document.processingStartedAt || document.updatedAt;
+  if (!startedAt) return true;
+
+  return Date.now() - new Date(startedAt).getTime() > STALE_PROCESSING_MS;
+}
+
 
 // Helper function to add signed thumbnails
 async function addSignedThumbnails(documents) {
@@ -31,27 +59,74 @@ async function addSignedThumbnails(documents) {
   );
 }
 
-// Get document by ID
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Saved-document cursors carry the sort key, so paging stays correct even when
+// the user saves or unsaves something between pages.
+function encodeSavedCursor(row) {
+  return Buffer.from(
+    `${new Date(row.savedAt).toISOString()}|${row._id}`,
+  ).toString("base64url");
+}
+
+function decodeSavedCursor(cursor) {
+  if (!cursor) return null;
+  try {
+    const [savedAt, id] = Buffer.from(cursor, "base64url")
+      .toString("utf8")
+      .split("|");
+    const date = new Date(savedAt);
+    if (Number.isNaN(date.getTime()) || !mongoose.isValidObjectId(id)) {
+      return null;
+    }
+    return { savedAt: date, id: new mongoose.Types.ObjectId(id) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Documents are addressed by slug in public URLs, but every old link, every
+ * bookmark and the admin panel still use the id. Both resolve here.
+ *
+ * `builder` receives the query so callers can populate/select as they need.
+ */
+async function findByIdOrSlug(identifier, builder = (q) => q) {
+  if (looksLikeObjectId(identifier)) {
+    return builder(Document.findById(identifier));
+  }
+  return builder(Document.findOne({ slug: String(identifier).toLowerCase() }));
+}
+
+// Slugs are lowercase alphanumerics and dashes; ids are 24 hex characters.
+// Anything else never reaches the database.
+const IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9-]{0,119}$/i;
+
+function isValidIdentifier(value) {
+  return IDENTIFIER_PATTERN.test(String(value || ""));
+}
+
+// Get document by ID or slug
 router.get(
   "/:id",
   optionalAuthMiddleware,
-  [param("id").isMongoId()],
   async (req, res, next) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
+      const { id } = req.params;
+
+      if (!isValidIdentifier(id)) {
         return res.status(400).json({
           success: false,
           message: "Invalid document ID",
         });
       }
 
-      const { id } = req.params;
       const userId = req.user?.userId;
 
-      const document = await Document.findById(id).populate(
-        "userId",
-        "name avatar",
+      const document = await findByIdOrSlug(id, (q) =>
+        q.populate("userId", "name avatar"),
       );
 
       if (!document) {
@@ -91,24 +166,24 @@ router.get(
 router.get(
   "/:id/view",
   optionalAuthMiddleware,
-  [param("id").isMongoId(), query("page").optional().isInt({ min: 1 })],
+  [query("page").optional().isInt({ min: 1 })],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
-      if (!errors.isEmpty()) {
+      const { id } = req.params;
+
+      if (!errors.isEmpty() || !isValidIdentifier(id)) {
         return res.status(400).json({
           success: false,
           message: "Invalid parameters",
         });
       }
 
-      const { id } = req.params;
       const { page } = req.query;
       const userId = req.user?.userId;
 
-      const document = await Document.findById(id).populate(
-        "userId",
-        "name avatar",
+      const document = await findByIdOrSlug(id, (q) =>
+        q.populate("userId", "name avatar"),
       );
 
       if (!document) {
@@ -118,7 +193,10 @@ router.get(
         });
       }
 
-      const isOwner = userId && document.userId.toString() === userId;
+      // userId is populated above, so the id lives one level down. Comparing
+      // against the populated document never matched, which locked owners out
+      // of their own private documents.
+      const isOwner = userId && document.userId?._id?.toString() === userId;
 
       if (!document.isViewable() && !isOwner) {
         return res.status(403).json({
@@ -203,8 +281,8 @@ router.get(
         cursor || "initial"
       }:${limit}`;
 
-      if (redisClient) {
-        const cached = await redisClient.get(cacheKey);
+      if (getRedis()) {
+        const cached = await getRedis().get(cacheKey);
         if (cached) {
           return res.json({ success: true, data: JSON.parse(cached) });
         }
@@ -244,8 +322,8 @@ router.get(
         nextCursor: hasMore ? docs[docs.length - 1]._id : null,
       };
 
-      if (redisClient && docs.length > 0) {
-        await redisClient.setEx(cacheKey, 120, JSON.stringify(response));
+      if (getRedis() && docs.length > 0) {
+        await getRedis().setEx(cacheKey, 120, JSON.stringify(response));
       }
 
       res.json({ success: true, data: response });
@@ -373,21 +451,17 @@ router.delete(
       }
 
       try {
-        if (document.s3Path) {
-          await S3Manager.deleteObject(document.s3Path);
-          // Also delete thumbnail if it exists
-          if (document.thumbnailS3Path) {
-            await S3Manager.deleteObject(document.thumbnailS3Path).catch(
-              (err) =>
-                logger.warn(
-                  `Failed to delete thumbnail for document ${id}:`,
-                  err,
-                ),
-            );
-          }
-        }
+        // Documents can share one S3 object when their bytes are identical, so
+        // this releases a reference rather than deleting outright. The object
+        // goes only when the last document referencing it goes.
+        await releaseStoredFile({
+          documentId: document._id,
+          fileHash: document.fileHash,
+          s3Path: document.s3Path,
+          thumbnailS3Path: document.thumbnailS3Path,
+        });
       } catch (s3Error) {
-        logger.error(`Failed to delete S3 object for document ${id}:`, s3Error);
+        logger.error(`Failed to release storage for document ${id}:`, s3Error);
         // Continue with DB deletion even if S3 fails, but log it
       }
 
@@ -508,8 +582,8 @@ async function getDocumentAnalytics(documentId) {
   try {
     const cacheKey = `analytics:doc:${documentId}`;
 
-    if (redisClient) {
-      const cached = await redisClient.get(cacheKey);
+    if (getRedis()) {
+      const cached = await getRedis().get(cacheKey);
       if (cached) {
         return JSON.parse(cached);
       }
@@ -527,8 +601,8 @@ async function getDocumentAnalytics(documentId) {
       ],
     };
 
-    if (redisClient) {
-      await redisClient.setEx(cacheKey, 3600, JSON.stringify(analytics));
+    if (getRedis()) {
+      await getRedis().setEx(cacheKey, 3600, JSON.stringify(analytics));
     }
 
     return analytics;
@@ -537,6 +611,176 @@ async function getDocumentAnalytics(documentId) {
     return {};
   }
 }
+
+// Renderable content for the in-app viewer. Only non-PDF types need this:
+// PDFs are rendered straight from the signed S3 URL.
+router.get(
+  "/:id/preview",
+  optionalAuthMiddleware,
+  rateLimitMiddleware("search"),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+
+      if (!isValidIdentifier(id)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid document ID" });
+      }
+
+      const userId = req.user?.userId;
+      const document = await findByIdOrSlug(id);
+
+      if (!document) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Document not found" });
+      }
+
+      const isOwner = userId && document.userId.toString() === userId;
+
+      if (!document.isViewable() && !isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: "You do not have permission to view this document",
+        });
+      }
+
+      const preview = await getDocumentPreview(document);
+
+      res.json({ success: true, data: preview });
+    } catch (error) {
+      logger.error("Error building document preview:", error);
+      res.status(502).json({
+        success: false,
+        message: "Could not build a preview for this document",
+      });
+    }
+  },
+);
+
+// Retry processing for a document that failed, or that got stuck before a
+// worker ever picked it up. Reuses the existing S3 object - the user does not
+// have to upload the file again.
+router.post(
+  "/:id/reprocess",
+  authMiddleware,
+  [param("id").isMongoId()],
+  rateLimitMiddleware("write"),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid document ID",
+        });
+      }
+
+      const { id } = req.params;
+      const userId = req.user.userId;
+      const isAdmin = req.user.role === "admin";
+
+      const document = await Document.findById(id);
+
+      if (!document) {
+        return res.status(404).json({
+          success: false,
+          message: "Document not found",
+        });
+      }
+
+      if (!isAdmin && document.userId.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: "You do not have permission to reprocess this document",
+        });
+      }
+
+      if (document.status === "deleted") {
+        return res.status(410).json({
+          success: false,
+          message: "This document has been deleted",
+        });
+      }
+
+      // Quarantined and taken-down documents failed moderation, not
+      // processing. Requeueing them would launder that decision.
+      if (
+        !RETRYABLE_STATUSES.has(document.status) &&
+        !isStuckInProcessing(document)
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            document.status === "processing"
+              ? "This document is already being processed"
+              : `Documents with status "${document.status}" cannot be reprocessed`,
+        });
+      }
+
+      if (!document.s3Path) {
+        return res.status(409).json({
+          success: false,
+          message: "The original file is no longer available",
+        });
+      }
+
+      // Processing is expensive (OCR, AI metadata, embeddings). Admins can keep
+      // going; owners get a bounded number of tries.
+      if (!isAdmin && document.retryCount >= MAX_MANUAL_RETRIES) {
+        return res.status(429).json({
+          success: false,
+          message: `This document has already been retried ${MAX_MANUAL_RETRIES} times. Please contact support.`,
+        });
+      }
+
+      // Confirm the object is really still in S3 before promising the user
+      // anything - otherwise the retry just fails again a minute later.
+      const exists = await S3Manager.objectExists(document.s3Path);
+      if (!exists) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "The uploaded file is missing from storage. Please upload it again.",
+        });
+      }
+
+      document.status = "processing";
+      document.processingError = undefined;
+      document.processingStartedAt = new Date();
+      document.retryCount = (document.retryCount || 0) + 1;
+      await document.save();
+
+      await invalidateDocumentPreview(document._id);
+
+      try {
+        await enqueueProcessing(document._id, document.s3Path);
+      } catch (error) {
+        document.status = "failed";
+        document.processingError =
+          "Could not queue the document for processing. Please retry.";
+        await document.save();
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        message: "Document queued for reprocessing",
+        data: {
+          documentId: document._id,
+          status: document.status,
+          retryCount: document.retryCount,
+          retriesRemaining: isAdmin
+            ? null
+            : Math.max(0, MAX_MANUAL_RETRIES - document.retryCount),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 // Save document
 router.post(
@@ -556,16 +800,6 @@ router.post(
       const { id } = req.params;
       const userId = req.user.userId;
 
-      const User = mongoose.model("User");
-      const user = await User.findById(userId);
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
-
       const document = await Document.findById(id);
       if (!document || !document.isViewable()) {
         return res.status(404).json({
@@ -579,7 +813,16 @@ router.post(
 
       // Validate collection if provided
       if (collectionId) {
-        const collectionExists = user.collections.id(collectionId);
+        if (!mongoose.isValidObjectId(collectionId)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid collection ID",
+          });
+        }
+        const collectionExists = await UserCollection.exists({
+          _id: collectionId,
+          userId,
+        });
         if (!collectionExists) {
           return res.status(404).json({
             success: false,
@@ -588,7 +831,14 @@ router.post(
         }
       }
 
-      await user.saveDocument(id, collectionId);
+      await SavedDocument.updateOne(
+        { userId, documentId: id },
+        {
+          $set: { collectionId: collectionId || null },
+          $setOnInsert: { userId, documentId: id, savedAt: new Date() },
+        },
+        { upsert: true },
+      );
 
       res.json({
         success: true,
@@ -618,17 +868,7 @@ router.delete(
       const { id } = req.params;
       const userId = req.user.userId;
 
-      const User = mongoose.model("User");
-      const user = await User.findById(userId);
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
-
-      await user.unsaveDocument(id);
+      await SavedDocument.deleteOne({ userId, documentId: id });
 
       res.json({
         success: true,
@@ -658,25 +898,16 @@ router.get(
       const { id } = req.params;
       const userId = req.user.userId;
 
-      const User = mongoose.model("User");
-      const user = await User.findById(userId);
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
-
-      const savedDoc = user.savedDocuments.find(
-        (d) => d.documentId.toString() === id,
-      );
-      const isSaved = !!savedDoc;
-      const collectionId = savedDoc ? savedDoc.collectionId : null;
+      const savedDoc = await SavedDocument.findOne({ userId, documentId: id })
+        .select("collectionId")
+        .lean();
 
       res.json({
         success: true,
-        data: { isSaved, collectionId },
+        data: {
+          isSaved: !!savedDoc,
+          collectionId: savedDoc ? savedDoc.collectionId : null,
+        },
       });
     } catch (error) {
       next(error);
@@ -687,61 +918,81 @@ router.get(
 // Get user collections
 router.get("/user/collections", authMiddleware, async (req, res, next) => {
   try {
-    const userId = req.user.userId;
-    const User = mongoose.model("User");
+    const userId = new mongoose.Types.ObjectId(req.user.userId);
 
-    // We need to populate savedDocuments to get thumbnails for the preview
-    const user = await User.findById(userId).populate({
-      path: "savedDocuments.documentId",
-      select: "thumbnailS3Path status",
-    });
+    const collections = await UserCollection.find({ userId })
+      .sort({ createdAt: 1 })
+      .lean();
 
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+    if (collections.length === 0) {
+      return res.json({ success: true, data: [] });
     }
 
-    // Process collections to add metadata (count and latest thumbnail)
+    // Counts and cover thumbnails are two small indexed aggregations rather
+    // than loading every saved document into memory.
+    const notDeleted = {
+      $lookup: {
+        from: "documents",
+        let: { docId: "$documentId" },
+        pipeline: [
+          {
+            $match: {
+              $expr: { $eq: ["$_id", "$$docId"] },
+              status: { $ne: "deleted" },
+            },
+          },
+          { $project: { thumbnailS3Path: 1 } },
+        ],
+        as: "doc",
+      },
+    };
+
+    const [counts, covers] = await Promise.all([
+      SavedDocument.aggregate([
+        { $match: { userId, collectionId: { $ne: null } } },
+        notDeleted,
+        { $unwind: "$doc" },
+        { $group: { _id: "$collectionId", documentCount: { $sum: 1 } } },
+      ]),
+      SavedDocument.aggregate([
+        { $match: { userId, collectionId: { $ne: null } } },
+        { $sort: { savedAt: -1 } },
+        notDeleted,
+        { $unwind: "$doc" },
+        { $match: { "doc.thumbnailS3Path": { $nin: [null, ""] } } },
+        {
+          $group: {
+            _id: "$collectionId",
+            thumbnailS3Path: { $first: "$doc.thumbnailS3Path" },
+          },
+        },
+      ]),
+    ]);
+
+    const countById = new Map(counts.map((c) => [String(c._id), c.documentCount]));
+    const coverById = new Map(
+      covers.map((c) => [String(c._id), c.thumbnailS3Path]),
+    );
+
     const collectionsWithMeta = await Promise.all(
-      user.collections.map(async (collection) => {
-        // Filter valid documents for this collection
-        const collectionDocs = user.savedDocuments.filter((doc) => {
-          return (
-            doc.documentId && // Document exists (not null)
-            doc.documentId.status !== "deleted" && // Not deleted
-            doc.collectionId &&
-            doc.collectionId.toString() === collection._id.toString()
-          );
-        });
-
-        const count = collectionDocs.length;
+      collections.map(async (collection) => {
+        const key = String(collection._id);
         let thumbnailUrl = null;
+        const coverKey = coverById.get(key);
 
-        // Find latest document with a thumbnail
-        // Sort by savedAt descending
-        collectionDocs.sort(
-          (a, b) => new Date(b.savedAt) - new Date(a.savedAt),
-        );
-
-        for (const doc of collectionDocs) {
-          if (doc.documentId.thumbnailS3Path) {
-            try {
-              thumbnailUrl = await s3.generateViewUrl(
-                doc.documentId.thumbnailS3Path,
-              );
-              if (thumbnailUrl) break; // Found one, stop looking
-            } catch (err) {
-              logger.error(
-                `Error generating thumbnail for collection preview: ${err}`,
-              );
-            }
+        if (coverKey) {
+          try {
+            thumbnailUrl = await s3.generateViewUrl(coverKey);
+          } catch (err) {
+            logger.error(
+              `Error generating thumbnail for collection preview: ${err}`,
+            );
           }
         }
 
         return {
-          ...collection.toObject(),
-          documentCount: count,
+          ...collection,
+          documentCount: countById.get(key) || 0,
           thumbnailUrl,
         };
       }),
@@ -768,32 +1019,24 @@ router.post("/user/collections", authMiddleware, async (req, res, next) => {
     }
 
     const userId = req.user.userId;
-    const User = mongoose.model("User");
-    const user = await User.findById(userId);
 
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
-    }
-
-    // Check if collection already exists
-    const exists = user.collections.some(
-      (c) => c.name.toLowerCase() === name.trim().toLowerCase(),
-    );
-
-    if (exists) {
-      return res.status(400).json({
-        success: false,
-        message: "Collection already exists",
+    // The {userId, name} unique index is case-insensitive, so a duplicate is a
+    // write error rather than a read-then-write race.
+    let newCollection;
+    try {
+      newCollection = await UserCollection.create({
+        userId,
+        name: name.trim(),
       });
+    } catch (error) {
+      if (error.code === 11000) {
+        return res.status(400).json({
+          success: false,
+          message: "Collection already exists",
+        });
+      }
+      throw error;
     }
-
-    user.collections.push({ name: name.trim() });
-    await user.save();
-
-    // Return the newly created collection (last one)
-    const newCollection = user.collections[user.collections.length - 1];
 
     res.json({
       success: true,
@@ -829,38 +1072,29 @@ router.put(
       }
 
       const userId = req.user.userId;
-      const User = mongoose.model("User");
-      const user = await User.findById(userId);
 
-      if (!user) {
-        return res
-          .status(404)
-          .json({ success: false, message: "User not found" });
+      let collection;
+      try {
+        collection = await UserCollection.findOneAndUpdate(
+          { _id: id, userId },
+          { $set: { name: name.trim() } },
+          { new: true },
+        );
+      } catch (error) {
+        if (error.code === 11000) {
+          return res.status(400).json({
+            success: false,
+            message: "Collection with this name already exists",
+          });
+        }
+        throw error;
       }
 
-      const collection = user.collections.id(id);
       if (!collection) {
         return res
           .status(404)
           .json({ success: false, message: "Collection not found" });
       }
-
-      // Check for duplicate names (excluding current collection)
-      const exists = user.collections.some(
-        (c) =>
-          c._id.toString() !== id &&
-          c.name.toLowerCase() === name.trim().toLowerCase(),
-      );
-
-      if (exists) {
-        return res.status(400).json({
-          success: false,
-          message: "Collection with this name already exists",
-        });
-      }
-
-      collection.name = name.trim();
-      await user.save();
 
       res.json({
         success: true,
@@ -900,68 +1134,108 @@ router.get(
         collectionId || "all"
       }:${cursor || "initial"}:${limit}`;
 
-      if (redisClient) {
-        const cached = await redisClient.get(cacheKey);
+      if (getRedis()) {
+        const cached = await getRedis().get(cacheKey);
         if (cached) {
           return res.json({ success: true, data: JSON.parse(cached) });
         }
       }
 
-      const User = mongoose.model("User");
-      const user = await User.findById(userId).populate({
-        path: "savedDocuments.documentId",
-        match: { status: "processed", visibility: "public" },
-        populate: { path: "userId", select: "name" },
-      });
+      const pageSize = parseInt(limit) || 20;
 
-      let valid = user.savedDocuments.filter((d) => d.documentId !== null);
+      const match = { userId: new mongoose.Types.ObjectId(userId) };
 
-      // Filter by collection
       if (collectionId && collectionId !== "all") {
         if (collectionId === "uncategorized") {
-          valid = valid.filter((d) => !d.collectionId);
+          match.collectionId = null;
+        } else if (mongoose.isValidObjectId(collectionId)) {
+          match.collectionId = new mongoose.Types.ObjectId(collectionId);
         } else {
-          valid = valid.filter(
-            (d) => d.collectionId && d.collectionId.toString() === collectionId,
-          );
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid collection ID" });
         }
       }
 
-      // Filter by search term if provided
+      // Keyset pagination on the {userId, savedAt:-1} index - the sort is
+      // served by the index, so nothing is loaded or sorted in memory.
+      const decoded = decodeSavedCursor(cursor);
+      if (cursor && !decoded) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid cursor" });
+      }
+      if (decoded) {
+        match.$or = [
+          { savedAt: { $lt: decoded.savedAt } },
+          { savedAt: decoded.savedAt, _id: { $lt: decoded.id } },
+        ];
+      }
+
+      const documentMatch = {
+        $expr: { $eq: ["$_id", "$$docId"] },
+        status: "processed",
+        visibility: "public",
+      };
+
       if (search) {
-        const searchRegex = new RegExp(search, "i");
-        valid = valid.filter(
-          (d) =>
-            searchRegex.test(d.documentId.generatedTitle) ||
-            searchRegex.test(d.documentId.originalFilename),
-        );
+        const searchRegex = new RegExp(escapeRegex(search), "i");
+        documentMatch.$or = [
+          { generatedTitle: searchRegex },
+          { originalFilename: searchRegex },
+        ];
       }
 
-      const sorted = valid
-        .sort((a, b) => b.savedAt - a.savedAt)
-        .map((item) => ({
-          savedAt: item.savedAt,
-          ...item.documentId.toObject(),
-        }));
+      const rows = await SavedDocument.aggregate([
+        { $match: match },
+        { $sort: { savedAt: -1, _id: -1 } },
+        {
+          $lookup: {
+            from: "documents",
+            let: { docId: "$documentId" },
+            pipeline: [
+              { $match: documentMatch },
+              { $project: { embedding: 0 } },
+            ],
+            as: "doc",
+          },
+        },
+        { $unwind: "$doc" },
+        { $limit: pageSize + 1 },
+        {
+          $lookup: {
+            from: "users",
+            let: { ownerId: "$doc.userId" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$_id", "$$ownerId"] } } },
+              { $project: { name: 1, avatar: 1 } },
+            ],
+            as: "owner",
+          },
+        },
+      ]);
 
-      let startIndex = 0;
-      if (cursor) {
-        startIndex = sorted.findIndex((x) => x._id.toString() === cursor) + 1;
-      }
+      const hasMore = rows.length > pageSize;
+      const page = hasMore ? rows.slice(0, pageSize) : rows;
 
-      const sliced = sorted.slice(startIndex, startIndex + parseInt(limit));
-      const hasMore = sorted.length > startIndex + sliced.length;
+      const docsWithThumb = await addSignedThumbnails(
+        page.map((row) => ({
+          savedAt: row.savedAt,
+          ...row.doc,
+          userId: row.owner?.[0] || row.doc.userId,
+        })),
+      );
 
-      const docsWithThumb = await addSignedThumbnails(sliced);
+      const last = page[page.length - 1];
 
       const response = {
         documents: docsWithThumb,
         cursor: cursor || null,
-        nextCursor: hasMore ? sliced[sliced.length - 1]._id : null,
+        nextCursor: hasMore && last ? encodeSavedCursor(last) : null,
       };
 
-      if (redisClient && sliced.length > 0) {
-        await redisClient.setEx(cacheKey, 180, JSON.stringify(response));
+      if (getRedis() && page.length > 0) {
+        await getRedis().setEx(cacheKey, 180, JSON.stringify(response));
       }
 
       res.json({ success: true, data: response });
@@ -976,16 +1250,10 @@ router.get("/user/stats", authMiddleware, async (req, res, next) => {
   try {
     const userId = req.user.userId;
 
-    // Get uploaded count
-    const uploadedCount = await Document.countDocuments({
-      userId,
-      status: { $ne: "deleted" },
-    });
-
-    // Get saved count
-    const User = mongoose.model("User");
-    const user = await User.findById(userId);
-    const savedCount = user ? user.savedDocuments.length : 0;
+    const [uploadedCount, savedCount] = await Promise.all([
+      Document.countDocuments({ userId, status: { $ne: "deleted" } }),
+      SavedDocument.countDocuments({ userId }),
+    ]);
 
     res.json({
       success: true,

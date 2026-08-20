@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { tmpdir } from "os";
 import { join, dirname } from "path";
 import path from "path";
@@ -28,8 +29,27 @@ try {
 const { PDFDocument } = require("pdf-lib");
 const Tesseract = require("tesseract.js");
 import { pdfToImg } from "pdftoimg-js";
-import { Jimp, loadFont } from "jimp";
-import { SANS_64_WHITE } from "jimp/fonts";
+import {
+  generateContentThumbnail,
+  generateFallbackThumbnail,
+  readPptxSlides,
+  thumbnailContentType,
+  thumbnailKeyFor,
+} from "./thumbnails.js";
+import { generateSlug } from "./slug.js";
+import { normalizeCategory, clampText } from "./categories.js";
+import { generateUniversalTitle, isUsableTitle } from "./titles.js";
+import {
+  getAiSettings,
+  getActiveProviders,
+  getEmbeddingModel,
+} from "./aiSettings.js";
+import {
+  hashFile,
+  claimStoredFile,
+  releaseStoredFile,
+  deleteObjectIfUnreferenced,
+} from "./storage.js";
 
 // Resolve the pdf.js font/cmap assets bundled with pdftoimg-js so that
 // server-side rasterization (thumbnails + OCR) can load the 14 standard fonts.
@@ -139,6 +159,49 @@ const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
+// Model names were hardcoded, so every provider broke silently as vendors
+// retired models and the pipeline quietly degraded to local heuristics. They
+// are configurable now, with defaults that are current as of August 2026:
+//   gemini-2.0-flash      retired; the API error recommends gemini-3.6-flash
+//   llama-3.1-8b-instant  deprecated by Groq on 2026-06-17
+//   text-embedding-004    shut down 2026-01-14, superseded by gemini-embedding-2
+// When one of these is retired again, set the env var rather than editing code.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+const GEMINI_EMBEDDING_MODEL =
+  process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
+const HUGGINGFACE_MODEL =
+  process.env.HUGGINGFACE_MODEL || "mistralai/Mistral-7B-Instruct-v0.3";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3";
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+
+// Constrains Gemini's output so the response is JSON by construction rather
+// than by asking nicely in the prompt and hoping.
+const METADATA_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    description: { type: "string" },
+    tags: { type: "array", items: { type: "string" } },
+    category: { type: "string" },
+  },
+  required: ["title", "description", "tags", "category"],
+};
+
+const PROVIDER_CALLS = {
+  gemini: generateWithGemini,
+  groq: generateWithGroq,
+  huggingface: generateWithHuggingFace,
+  ollama: generateWithOllama,
+};
+
+const PROVIDER_LABELS = {
+  gemini: "Google Gemini",
+  groq: "Groq",
+  huggingface: "Hugging Face",
+  ollama: "Ollama",
+};
+
 const geminiAI = GEMINI_API_KEY
   ? new GoogleGenAI({ apiKey: GEMINI_API_KEY })
   : null;
@@ -167,19 +230,37 @@ const __dirname = dirname(__filename);
 export async function processDocument(
   documentId,
   s3Key,
-  onProgress = () => {}
+  onProgress = () => {},
+  { isFinalAttempt = true } = {}
 ) {
   const document = await Document.findById(documentId);
   if (!document) throw new Error(`Document ${documentId} not found`);
 
   let filePath, thumbnailPath;
 
+  if (!document.processingStartedAt) {
+    document.processingStartedAt = new Date();
+  }
+
   try {
     await ensureDependencies();
 
     // Perform actual virus scan
     onProgress({ step: "virus-scan", message: "Scanning for viruses..." });
-    const virusScanResult = await performVirusScan(s3Key);
+
+    // The bytes in S3 are immutable, so a clean scan stays valid. Reprocessing
+    // used to redo the full VirusTotal round trip - minutes per document - to
+    // reach the same answer.
+    const previousScan = document.virusScanResult;
+    const virusScanResult =
+      previousScan?.clean === true
+        ? previousScan
+        : await performVirusScan(s3Key);
+
+    if (previousScan?.clean === true) {
+      logger.info(`Reusing clean scan result for ${s3Key}`);
+    }
+
     if (!virusScanResult.clean) {
       throw new Error(
         `Virus scan failed: ${
@@ -193,6 +274,77 @@ export async function processDocument(
       message: "Extracting text and data...",
     });
     filePath = await downloadFromS3(s3Key);
+
+    // Hash before doing any expensive work: OCR and AI metadata on a file we
+    // already hold are pure waste.
+    const fileHash = await hashFile(filePath);
+
+    // A reprocess re-runs this whole block. Remembering whether this document
+    // already holds a reference keeps it from incrementing the count a second
+    // time, which would pin the object in S3 forever.
+    const alreadyClaimed = document.fileHash === fileHash;
+    document.fileHash = fileHash;
+
+    const alreadyOwned = await Document.findOne({
+      _id: { $ne: document._id },
+      userId: document.userId,
+      fileHash,
+      status: { $nin: ["deleted", "duplicate"] },
+    })
+      .select("_id generatedTitle slug")
+      .lean();
+
+    if (alreadyOwned) {
+      // This user already has these exact bytes. Keep a tombstone pointing at
+      // the original instead of a second copy of everything.
+      logger.info(
+        `Document ${documentId} duplicates ${alreadyOwned._id} for the same user`
+      );
+
+      document.status = "duplicate";
+      document.duplicateOf = alreadyOwned._id;
+      document.processingError = undefined;
+      document.generatedTitle =
+        alreadyOwned.generatedTitle || document.originalFilename.slice(0, 255);
+      await document.save();
+
+      // Give up the storage. If this document already held a reference (a
+      // reprocess), release it properly so the shared object survives for
+      // whoever else points at it; if not, the upload is ours alone to remove.
+      await releaseStoredFile({
+        documentId: document._id,
+        fileHash: alreadyClaimed ? fileHash : null,
+        s3Path: s3Key,
+        thumbnailS3Path: document.thumbnailS3Path,
+      });
+
+      onProgress({
+        step: "completed",
+        message: "Already uploaded",
+        completed: true,
+        duplicate: true,
+      });
+
+      return;
+    }
+
+    // Different owners may hold the same file; they share one S3 object.
+    if (!alreadyClaimed) {
+      const claim = await claimStoredFile({
+        documentId: document._id,
+        hash: fileHash,
+        s3Path: s3Key,
+        sizeBytes: document.sizeBytes,
+      });
+
+      if (claim.deduplicated) {
+        document.s3Path = claim.s3Path;
+        s3Key = claim.s3Path;
+        // The temp file we already downloaded is byte-identical, so there is
+        // no need to fetch the canonical object again.
+      }
+    }
+
     const content = await extractContent(filePath, document.fileType);
 
     if (!content || content.trim().length === 0) {
@@ -223,12 +375,25 @@ export async function processDocument(
       step: "creating-thumbnail",
       message: "Generating thumbnail...",
     });
-    thumbnailPath = await generateThumbnail(filePath, document.fileType);
+    thumbnailPath = await generateThumbnail(filePath, document.fileType, content);
 
     if (thumbnailPath) {
-      const thumbnailKey = s3Key.replace("/uploads/", "/thumbnails/") + ".jpg";
+      const thumbnailKey = thumbnailKeyFor(s3Key, thumbnailPath);
       await uploadThumbnail(thumbnailPath, thumbnailKey);
+
+      // A reprocess can move the thumbnail to a different extension; drop the
+      // old object so it does not linger unreferenced in the bucket.
+      const previousKey = document.thumbnailS3Path;
       document.thumbnailS3Path = thumbnailKey;
+      if (previousKey && previousKey !== thumbnailKey) {
+        // Documents sharing a source object derive the same thumbnail key, so
+        // the old one is not necessarily ours alone to delete.
+        await deleteObjectIfUnreferenced({
+          documentId: document._id,
+          key: previousKey,
+          field: "thumbnailS3Path",
+        });
+      }
     }
 
     onProgress({
@@ -237,25 +402,72 @@ export async function processDocument(
     });
     const embedding = await generateLocalEmbeddings(content, metadata);
 
-    document.generatedTitle = metadata.title;
-    document.generatedDescription = metadata.description;
-    document.tags = metadata.tags;
-    document.category = metadata.category;
+    // The AI output is untrusted input as far as the schema is concerned. An
+    // invented category or an over-long title used to fail validation at save
+    // time and discard the entire run, extraction and OCR included.
+    document.generatedTitle =
+      clampText(metadata.title, 255) || document.originalFilename.slice(0, 255);
+    document.generatedDescription = clampText(metadata.description, 500);
+    document.tags = Array.isArray(metadata.tags)
+      ? metadata.tags
+          .filter((tag) => typeof tag === "string" && tag.trim())
+          .map((tag) => tag.trim().slice(0, 50))
+          .slice(0, 25)
+      : [];
+    document.category = normalizeCategory(metadata.category);
     document.pageCount = metadata.pageCount;
     // document.embeddingsId = embeddingsId; // Deprecated in favor of direct embedding
     if (embedding) {
       document.embedding = embedding;
     }
     document.metadata = metadata;
+    // Generated once and never regenerated, so a later title edit or a
+    // reprocess does not silently change a URL that is already indexed.
+    if (!document.slug) {
+      document.slug = generateSlug(document.generatedTitle, document.originalFilename);
+    }
     document.status = "processed";
+    document.processedAt = new Date();
+    document.processingError = undefined;
     document.virusScanResult = virusScanResult;
 
     onProgress({ step: "finalizing", message: "Saving document..." });
-    await document.save();
+
+    try {
+      await document.save();
+    } catch (error) {
+      // The random slug suffix collided. Astronomically unlikely, but a
+      // collision must not fail the whole pipeline.
+      if (error.code === 11000 && error.keyPattern?.slug) {
+        document.slug = generateSlug(document.generatedTitle, document.originalFilename);
+        await document.save();
+      } else if (error.code === 11000 && error.keyPattern?.fileHash) {
+        // A stale unique index on fileHash is still enforced in the database.
+        // Losing an entire processing run - extraction, OCR, AI metadata - over
+        // a deduplication hint is a terrible trade, so drop the hint and keep
+        // the document. Run `npm run migrate -- 005 indexes` to fix it properly.
+        logger.error(
+          `fileHash is still uniquely indexed in the database; saving ${documentId} without it. ` +
+            `Run: npm run migrate -- 005 indexes`
+        );
+        document.fileHash = undefined;
+        await document.save();
+      } else {
+        throw error;
+      }
+    }
   } catch (error) {
     logger.error(`Processing failed for document ${documentId}:`, error);
-    document.status = "failed";
-    document.processingError = error.message;
+
+    // Only give up once the queue has exhausted its retries. Marking the
+    // document failed on the first attempt made the remaining Bull retries
+    // invisible - the UI showed an error while attempts 2 and 3 were still
+    // pending, and a later success left a stale error message behind.
+    if (isFinalAttempt) {
+      document.status = "failed";
+      document.processingError = error.message;
+    }
+
     await document.save();
     throw error;
   } finally {
@@ -284,10 +496,62 @@ async function performVirusScan(s3Key) {
   }
 }
 
+/**
+ * VirusTotal already knows most files. Asking by hash is one request that
+ * answers immediately; uploading is a multi-megabyte POST followed by up to 15
+ * polls with backoff, which is 2-4 minutes per document. Uploading first made
+ * every reprocess pay full price for a file VT had already analysed.
+ *
+ * Returns null when VT has not seen this hash, so the caller falls through to
+ * the upload path.
+ */
+async function lookupVirusTotalByHash(fileBuffer, apiKey) {
+  const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+
+  try {
+    const response = await fetch(
+      `https://www.virustotal.com/api/v3/files/${sha256}`,
+      { headers: { "x-apikey": apiKey } }
+    );
+
+    if (response.status === 404) return null; // not seen before
+    if (!response.ok) return null; // rate limited or down; upload path decides
+
+    const body = await response.json();
+    const stats = body?.data?.attributes?.last_analysis_stats;
+    if (!stats) return null;
+
+    const malicious = stats.malicious || 0;
+    const suspicious = stats.suspicious || 0;
+
+    logger.info(
+      `✓ VirusTotal cache hit for ${sha256.slice(0, 12)}… (malicious: ${malicious}, suspicious: ${suspicious})`
+    );
+
+    return {
+      clean: malicious === 0 && suspicious === 0,
+      scanner: "virustotal-cached",
+      scannedAt: new Date(),
+      details:
+        malicious > 0 || suspicious > 0
+          ? `Flagged by ${malicious} engine(s) as malicious, ${suspicious} as suspicious`
+          : `Clean (${stats.undetected || 0} engines, cached result)`,
+      sha256,
+    };
+  } catch (error) {
+    logger.warn(`VirusTotal hash lookup failed, will upload: ${error.message}`);
+    return null;
+  }
+}
+
 async function scanWithVirusTotal(s3Key, apiKey) {
   try {
     const fileBuffer = await S3Manager.getObjectBuffer(s3Key);
     const fileSize = fileBuffer.length;
+
+    // Ask by hash before spending an upload and a polling loop.
+    const cached = await lookupVirusTotalByHash(fileBuffer, apiKey);
+    if (cached) return cached;
 
     // VirusTotal has a 32MB limit for direct uploads
     if (fileSize > 32 * 1024 * 1024) {
@@ -564,7 +828,193 @@ function validateFileSignature(buffer, extension) {
   return true;
 }
 
-async function generateThumbnail(filePath, fileType) {
+/**
+ * Asks each configured metadata provider to answer one trivial prompt.
+ *
+ * The pipeline degrades silently: when every provider is down it falls through
+ * to local heuristics and still produces a "successful" document, just with a
+ * title scraped off the first page. That is fine for one upload and very much
+ * not fine for a bulk backfill, so callers that generate many titles at once
+ * check this first.
+ */
+export async function checkMetadataProviders({ onlyEnabled = true } = {}) {
+  const probe =
+    "Quarterly engineering review covering pipeline throughput and latency.";
+
+  const configured = {
+    gemini: Boolean(geminiAI),
+    groq: Boolean(groq),
+    huggingface: Boolean(huggingface),
+    ollama: true, // reachability is the only way to know
+  };
+
+  const settings = await getAiSettings();
+  const providers = onlyEnabled
+    ? settings.providers.filter((entry) => entry.enabled)
+    : settings.providers;
+
+  const results = [];
+
+  for (const { provider, model, enabled } of providers) {
+    if (!configured[provider]) {
+      results.push({
+        provider,
+        model,
+        enabled,
+        ok: false,
+        reason: "API key not configured",
+      });
+      continue;
+    }
+
+    const startedAt = Date.now();
+    try {
+      const result = await PROVIDER_CALLS[provider](probe, "probe.txt", model);
+      results.push({
+        provider,
+        model,
+        enabled,
+        ok: Boolean(result?.title),
+        latencyMs: Date.now() - startedAt,
+        reason: result?.title ? undefined : "responded without a title",
+      });
+    } catch (error) {
+      results.push({
+        provider,
+        model,
+        enabled,
+        ok: false,
+        latencyMs: Date.now() - startedAt,
+        reason: error.message,
+      });
+    }
+  }
+
+  return { results, anyWorking: results.some((result) => result.ok) };
+}
+
+/** Probes a single provider/model pair without saving anything. */
+export async function testMetadataProvider(provider, model) {
+  const call = PROVIDER_CALLS[provider];
+  if (!call) throw new Error(`Unknown provider: ${provider}`);
+
+  const startedAt = Date.now();
+
+  try {
+    const result = await call(
+      "Quarterly engineering review covering pipeline throughput and latency.",
+      "probe.txt",
+      model
+    );
+
+    return {
+      ok: Boolean(result?.title),
+      latencyMs: Date.now() - startedAt,
+      sample: result?.title
+        ? { title: result.title, category: result.category }
+        : undefined,
+      reason: result?.title ? undefined : "responded without a title",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      reason: error.message,
+    };
+  }
+}
+
+/** Probes the embedding model, which fails silently in normal processing. */
+export async function testEmbeddingModel(model) {
+  if (!geminiEmbeddingAI) {
+    return { ok: false, reason: "GEMINI_API_KEY is not configured" };
+  }
+
+  const startedAt = Date.now();
+
+  try {
+    const result = await geminiEmbeddingAI.models.embedContent({
+      model: model || (await getEmbeddingModel()),
+      contents: "probe",
+    });
+
+    const dimensions = result.embeddings?.[0]?.values?.length || 0;
+
+    return {
+      ok: dimensions > 0,
+      latencyMs: Date.now() - startedAt,
+      dimensions,
+      reason: dimensions > 0 ? undefined : "returned an empty embedding",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      reason: error.message,
+    };
+  }
+}
+
+/**
+ * Rebuilds only the thumbnail for an existing document.
+ *
+ * Deliberately separate from processDocument: a full reprocess would re-run the
+ * AI metadata step and overwrite titles, descriptions and categories that an
+ * admin may have edited by hand. This touches thumbnailS3Path and nothing else.
+ */
+export async function regenerateThumbnail(documentId) {
+  const document = await Document.findById(documentId);
+  if (!document) throw new Error(`Document ${documentId} not found`);
+  if (!document.s3Path) throw new Error(`Document ${documentId} has no file`);
+
+  await ensureDependencies();
+
+  let filePath, thumbnailPath;
+
+  try {
+    filePath = await downloadFromS3(document.s3Path);
+
+    // Only the text-page renderers need extracted content; pptx and xlsx read
+    // the file directly, and pdf is rasterized. Skipping extraction here keeps
+    // a backfill from re-running OCR over every scanned PDF.
+    let content;
+    if (document.fileType === "docx" || document.fileType === "csv") {
+      content = await extractContent(filePath, document.fileType);
+    }
+
+    thumbnailPath = await generateThumbnail(
+      filePath,
+      document.fileType,
+      content
+    );
+
+    if (!thumbnailPath) {
+      throw new Error("Thumbnail generation produced no file");
+    }
+
+    const thumbnailKey = thumbnailKeyFor(document.s3Path, thumbnailPath);
+    await uploadThumbnail(thumbnailPath, thumbnailKey);
+
+    const previousKey = document.thumbnailS3Path;
+    document.thumbnailS3Path = thumbnailKey;
+    await document.save();
+
+    if (previousKey && previousKey !== thumbnailKey) {
+      await deleteObjectIfUnreferenced({
+        documentId: document._id,
+        key: previousKey,
+        field: "thumbnailS3Path",
+      });
+    }
+
+    return thumbnailKey;
+  } finally {
+    await cleanupTempFile(filePath);
+    if (thumbnailPath) await cleanupTempFile(thumbnailPath);
+  }
+}
+
+async function generateThumbnail(filePath, fileType, content) {
   try {
     logger.info(
       `🎨 Generating first page thumbnail for ${fileType}: ${filePath}`
@@ -580,23 +1030,13 @@ async function generateThumbnail(filePath, fileType) {
       return await generateFallbackThumbnail(fileType);
     }
 
-    switch (fileType) {
-      case "pdf":
-        return await generatePDFFirstPageThumbnail(filePath);
-
-      case "docx":
-        return await generateDOCXFirstPageThumbnail(filePath);
-
-      case "pptx":
-        return await generatePPTXFirstPageThumbnail(filePath);
-
-      case "xlsx":
-      case "csv":
-        return await generateSpreadsheetFirstPageThumbnail(filePath, fileType);
-
-      default:
-        return await generateFallbackThumbnail(fileType);
+    // PDFs are rasterized for real; every other type gets a page rendered from
+    // its own extracted content (see shared/utils/thumbnails.js).
+    if (fileType === "pdf") {
+      return await generatePDFFirstPageThumbnail(filePath);
     }
+
+    return await generateContentThumbnail(filePath, fileType, content);
   } catch (error) {
     logger.error(`❌ Thumbnail generation failed for ${filePath}:`, {
       error: error.message,
@@ -658,81 +1098,15 @@ async function generatePDFFirstPageThumbnail(filePath) {
   }
 }
 
-async function generateDOCXFirstPageThumbnail(filePath) {
-  // actual DOCX rendering is complex + heavy;
-  // this gives a nice type badge instead and is fully portable
-  return generateTypeBadgeThumbnail("DOCX", "docx", 0x4f6bedff);
-}
-
-async function generatePPTXFirstPageThumbnail(filePath) {
-  return generateTypeBadgeThumbnail("PPTX", "pptx", 0xd24726ff);
-}
-
-async function generateSpreadsheetFirstPageThumbnail(filePath) {
-  // for XLSX, CSV, etc.
-  return generateTypeBadgeThumbnail("SHEET", "sheet", 0x217346ff);
-}
-
-async function generateTypeBadgeThumbnail(label, fileTypeForName, bgColorHex) {
-  const fs = await import("fs");
-  const outFileName = `thumb-${fileTypeForName}-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}.png`;
-
-  const width = 320;
-  const height = 400;
-
-  // bgColorHex: 0xRRGGBBAA (e.g. 0x4f6bedff)
-  const image = new Jimp({ width, height, color: bgColorHex });
-
-  // Load built-in Jimp font
-  const font = await loadFont(SANS_64_WHITE);
-
-  image.print({
-    font,
-    x: 0,
-    y: 0,
-    text: label,
-    maxWidth: width,
-    maxHeight: height,
-    alignmentX: 2, // Horizontal Align Center
-    alignmentY: 16, // Vertical Align Middle
-  });
-
-  const outPath = path.join(tmpdir(), outFileName);
-  await image.write(outPath);
-
-  logger.info("Generated type badge thumbnail", {
-    label,
-    fileTypeForName,
-    outPath,
-  });
-
-  return outPath;
-}
-
-async function generateFallbackThumbnail(fileType) {
-  const label = (fileType || "FILE").toUpperCase();
-  return generateTypeBadgeThumbnail(label, "generic", 0x444444ff);
-}
-
-function getFileIcon(fileType) {
-  const icons = {
-    pdf: "📄",
-    docx: "📝",
-    pptx: "📊",
-    xlsx: "📈",
-    csv: "📋",
-    default: "📁",
-  };
-  return icons[fileType] || icons.default;
-}
-
 async function uploadThumbnail(thumbnailPath, thumbnailKey) {
   try {
     const fs = await import("fs");
     const fileBuffer = await fs.promises.readFile(thumbnailPath);
-    await S3Manager.uploadObject(thumbnailKey, fileBuffer, "image/jpeg");
+    await S3Manager.uploadObject(
+      thumbnailKey,
+      fileBuffer,
+      thumbnailContentType(thumbnailPath)
+    );
     logger.info(`✅ Thumbnail uploaded to: ${thumbnailKey}`);
   } catch (error) {
     logger.error("Error uploading thumbnail:", error);
@@ -970,7 +1344,27 @@ async function extractFromDOCX(filePath) {
 }
 
 async function extractFromPPTX(filePath) {
-  return "Presentation content extracted from PPTX file. Full PPTX text extraction to be implemented.";
+  try {
+    // This used to return a fixed placeholder string, which meant every
+    // presentation got AI metadata generated from the same sentence.
+    const slides = await readPptxSlides(filePath, 200);
+
+    const content = slides
+      .map((texts, index) =>
+        texts.length ? `Slide ${index + 1}\n${texts.join("\n")}` : ""
+      )
+      .filter(Boolean)
+      .join("\n\n");
+
+    if (!content.trim()) {
+      throw new Error("Presentation contains no extractable text");
+    }
+
+    return content;
+  } catch (error) {
+    logger.error("PPTX extraction failed:", error);
+    throw new Error(`PPTX extraction failed: ${error.message}`);
+  }
 }
 
 async function extractFromXLSX(filePath) {
@@ -994,67 +1388,36 @@ async function extractFromCSV(filePath) {
   return fs.promises.readFile(filePath, "utf8");
 }
 
+
+/**
+ * Walks the configured provider chain and returns the first usable answer.
+ *
+ * Which providers run, in what order, and with which model all come from the
+ * admin settings rather than being hardcoded here.
+ */
 async function generateEnhancedMetadata(content, filename, fileType) {
-  try {
-    const geminiResult = await generateWithGemini(content, filename);
-    if (geminiResult?.title) {
-      logger.info("Used Google Gemini for metadata");
-      return enrichMetadataWithLocalData(
-        geminiResult,
-        content,
-        fileType,
-        "gemini"
-      );
-    }
-  } catch (error) {
-    logger.warn(`Gemini failed: ${error.message}`);
-  }
+  const providers = await getActiveProviders();
 
-  try {
-    const groqResult = await generateWithGroq(content, filename);
-    if (groqResult?.title) {
-      logger.info("Used Groq for metadata");
-      return enrichMetadataWithLocalData(groqResult, content, fileType, "groq");
-    }
-  } catch (error) {
-    logger.warn(`Groq failed: ${error.message}`);
-  }
+  for (const { provider, model } of providers) {
+    const call = PROVIDER_CALLS[provider];
+    if (!call) continue;
 
-  try {
-    const hfResult = await generateWithHuggingFace(content, filename);
-    if (hfResult?.title) {
-      logger.info("Used Hugging Face for metadata");
-      return enrichMetadataWithLocalData(
-        hfResult,
-        content,
-        fileType,
-        "huggingface"
-      );
+    try {
+      const result = await call(content, filename, model);
+      if (result?.title) {
+        logger.info(`Used ${PROVIDER_LABELS[provider]} (${model}) for metadata`);
+        return enrichMetadataWithLocalData(result, content, fileType, provider);
+      }
+    } catch (error) {
+      logger.warn(`${PROVIDER_LABELS[provider]} failed: ${error.message}`);
     }
-  } catch (error) {
-    logger.warn(`Hugging Face failed: ${error.message}`);
-  }
-
-  try {
-    const ollamaResult = await generateWithOllama(content, filename);
-    if (ollamaResult?.title) {
-      logger.info("Used Ollama for metadata");
-      return enrichMetadataWithLocalData(
-        ollamaResult,
-        content,
-        fileType,
-        "ollama"
-      );
-    }
-  } catch (error) {
-    logger.warn(`Ollama failed: ${error.message}`);
   }
 
   logger.info("Using smart local processing for metadata");
   return generateUniversalMetadata(content, filename, fileType);
 }
 
-async function generateWithGemini(content, filename) {
+async function generateWithGemini(content, filename, model = GEMINI_MODEL) {
   if (!geminiAI) throw new Error("Gemini API key not configured");
 
   const truncatedContent = content.substring(0, 4000);
@@ -1083,9 +1446,19 @@ Return only valid JSON and do not generate new categories like 'computer-science
 
   try {
     const response = await geminiAI.models.generateContent({
-      model: "gemini-2.0-flash",
+      model,
       contents: prompt,
-      config: { temperature: 0.3, maxOutputTokens: 300 },
+      config: {
+        temperature: 0.3,
+        // Gemini 3 models think before answering and wrap prose around JSON,
+        // which is why every call failed with "No JSON found in response".
+        // Constraining the response to a schema removes the parsing guesswork,
+        // and the larger budget leaves room for the thinking tokens that were
+        // exhausting the old 300-token cap before any JSON was produced.
+        maxOutputTokens: 2048,
+        responseMimeType: "application/json",
+        responseSchema: METADATA_RESPONSE_SCHEMA,
+      },
     });
 
     const text = response.text;
@@ -1097,14 +1470,14 @@ Return only valid JSON and do not generate new categories like 'computer-science
   }
 }
 
-async function generateWithGroq(content, filename) {
+async function generateWithGroq(content, filename, model = GROQ_MODEL) {
   if (!groq) throw new Error("Groq API key not configured");
 
   const truncatedContent = content.substring(0, 4000);
 
   try {
     const response = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
+      model,
       messages: [
         {
           role: "system",
@@ -1119,8 +1492,14 @@ Content: ${truncatedContent}`,
         },
       ],
       temperature: 0.3,
-      max_tokens: 300,
+      // The recorded failure was literally "max completion tokens reached
+      // before generating a valid document": gpt-oss models spend tokens
+      // reasoning before emitting JSON, and 300 was not enough to finish.
+      max_tokens: 2048,
       response_format: { type: "json_object" },
+      // Reasoning is wasted effort for a summarisation task and is what was
+      // eating the budget. Only gpt-oss models accept this parameter.
+      ...(model.includes("gpt-oss") ? { reasoning_effort: "low" } : {}),
     });
 
     const contentText = response.choices[0]?.message?.content;
@@ -1132,7 +1511,7 @@ Content: ${truncatedContent}`,
   }
 }
 
-async function generateWithHuggingFace(content, filename) {
+async function generateWithHuggingFace(content, filename, model = HUGGINGFACE_MODEL) {
   if (!huggingface) throw new Error("Hugging Face token not configured");
 
   const truncatedContent = content.substring(0, 2000);
@@ -1141,27 +1520,41 @@ Document: ${filename}
 Content: ${truncatedContent}`;
 
   try {
-    const result = await huggingface.textGeneration({
-      model: "mistralai/Mistral-7B-Instruct-v0.1",
-      inputs: prompt,
-      parameters: { max_new_tokens: 300, temperature: 0.3 },
+    // Inference providers serve these models under the "conversational" task,
+    // not "text-generation" - textGeneration() fails with a task-mismatch error
+    // regardless of which model is named.
+    const result = await huggingface.chatCompletion({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a document analysis assistant. Return ONLY valid JSON without any formatting or markdown.",
+        },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 300,
+      temperature: 0.3,
     });
 
-    return parseAIResponse(result.generated_text);
+    const text = result.choices?.[0]?.message?.content;
+    if (!text) throw new Error("No response content from Hugging Face");
+
+    return parseAIResponse(text);
   } catch (error) {
     throw new Error(`Hugging Face: ${error.message}`);
   }
 }
 
-async function generateWithOllama(content, filename) {
+async function generateWithOllama(content, filename, model = OLLAMA_MODEL) {
   const truncatedContent = content.substring(0, 2000);
 
   try {
-    const response = await fetch("http://localhost:11434/api/generate", {
+    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "llama2",
+        model,
         prompt: `Return JSON: { "title": "...", "description": "...", "tags": ["tag1","tag2","tag3"], "category": "any one from these" - ["technology","business","education","health","entertainment","sports","finance-money-management","games-activities","comics","philosophy","career-growth","politics","biography-memoir","study-aids-test-prep","law","art","science","history","erotica","lifestyle","religion-spirituality","self-improvement","language-arts","cooking-food-wine","true-crime","sheet-music","fiction","non-fiction","science-fiction","fantasy","romance","thriller-suspense","horror","poetry","graphic-novels","young-adult","children","parenting-family","marketing-sales","psychology","social-sciences","engineering","mathematics","nature-environment","travel","reference","design", "news-media", "professional-development", "other"] }
 Document: ${filename}
 Content: ${truncatedContent}`,
@@ -1242,55 +1635,6 @@ function generateUniversalMetadata(content, filename, fileType) {
   };
 }
 
-function generateUniversalTitle(content, filename, fileType) {
-  const cleanFilename = filename.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
-  if (fileType === "pdf" || fileType === "docx") {
-    const lines = content.split("\n").slice(0, 10);
-    const potentialTitles = lines.filter((line) => {
-      const words = line.trim().split(/\s+/);
-      return (
-        words.length >= 2 &&
-        words.length <= 12 &&
-        !line.match(/page|\d{1,2}\/\d{1,2}|chapter|section/i)
-      );
-    });
-    if (potentialTitles.length > 0)
-      return potentialTitles[0].trim().substring(0, 80);
-  }
-
-  const lines = content.split("\n");
-  const titleCandidates = lines
-    .map((line) => {
-      const words = line.trim().split(/\s+/);
-      const capitalRatio =
-        words.filter(
-          (word) => word.length > 0 && word[0] === word[0].toUpperCase()
-        ).length / Math.max(1, words.length);
-      return { line: line.trim(), score: capitalRatio, length: words.length };
-    })
-    .filter(
-      (candidate) =>
-        candidate.score > 0.6 && candidate.length >= 2 && candidate.length <= 10
-    )
-    .sort((a, b) => b.score - a.score);
-
-  if (titleCandidates.length > 0)
-    return titleCandidates[0].line.substring(0, 80);
-
-  const sentences = content.split(/[.!?]+/);
-  const firstMeaningful = sentences.find((s) => {
-    const trimmed = s.trim();
-    return (
-      trimmed.length > 10 &&
-      trimmed.length < 120 &&
-      !trimmed.match(/^\s*(abstract|introduction|table of contents)/i)
-    );
-  });
-
-  return firstMeaningful
-    ? firstMeaningful.trim().substring(0, 80)
-    : cleanFilename || "Untitled Document";
-}
 
 function generateUniversalDescription(content, fileType) {
   const paragraphs = content
@@ -1768,7 +2112,7 @@ Content:
 ${content.substring(0, 8000)}`.trim();
 
     const result = await geminiEmbeddingAI.models.embedContent({
-      model: "text-embedding-004",
+      model: await getEmbeddingModel(),
       contents: textToEmbed,
     });
 

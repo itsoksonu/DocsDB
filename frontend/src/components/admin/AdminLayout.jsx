@@ -68,7 +68,7 @@ const AdminLayout = ({ children }) => {
       icon: DownloadCloud,
     },
     { name: "Moderation", href: "/admin/moderation", icon: ShieldAlert },
-    // { name: "Settings", href: "/admin/settings", icon: Settings },
+    { name: "AI Settings", href: "/admin/settings", icon: Settings },
   ];
 
   return (

@@ -11,7 +11,7 @@ export const getServerSideProps = async (ctx) => {
     const documents = response.data.data;
 
     const fields = documents.map((doc) => ({
-      loc: `${siteUrl}/document/${doc._id}`,
+      loc: `${siteUrl}/document/${doc.slug || doc._id}`,
       lastmod: new Date(doc.updatedAt).toISOString(),
       priority: 0.7,
       changefreq: "weekly",

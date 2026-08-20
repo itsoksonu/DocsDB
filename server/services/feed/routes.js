@@ -3,7 +3,8 @@ import { query, validationResult } from "express-validator";
 import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
-import databaseManager from "../../shared/database/connection.js";
+import { getRedis } from "../../shared/utils/redis.js";
+import { cachedCount } from "../../shared/utils/cachedCount.js";
 import { generateFeed } from "../../shared/utils/feedGenerator.js";
 import logger from "../../shared/utils/logger.js";
 import s3 from "../../shared/utils/s3.js";
@@ -13,7 +14,6 @@ import { GoogleGenAI } from "@google/genai";
 
 const router = express.Router();
 
-const redisClient = databaseManager.getRedisClient();
 const geminiAI = process.env.GEMINI_API_KEY
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
@@ -114,8 +114,8 @@ router.get("/sitemap-ids", async (req, res, next) => {
   try {
     const cacheKey = "sitemap:ids";
 
-    if (redisClient) {
-      const cached = await redisClient.get(cacheKey);
+    if (getRedis()) {
+      const cached = await getRedis().get(cacheKey);
       if (cached) {
         return res.json({
           success: true,
@@ -124,20 +124,25 @@ router.get("/sitemap-ids", async (req, res, next) => {
       }
     }
 
+    // Sitemaps cap at 50,000 URLs. Sorting newest-first means the cap drops the
+    // oldest documents rather than an arbitrary slice.
     const documents = await Document.find({
       status: "processed",
       visibility: "public",
     })
-      .select("_id updatedAt")
+      .select("_id slug updatedAt")
+      .sort({ updatedAt: -1 })
+      .limit(50000)
       .lean();
 
     const result = documents.map((doc) => ({
       _id: doc._id,
+      slug: doc.slug || null,
       updatedAt: doc.updatedAt,
     }));
 
-    if (redisClient) {
-      await redisClient.setEx(cacheKey, 3600, JSON.stringify(result)); // Cache for 1 hour
+    if (getRedis()) {
+      await getRedis().setEx(cacheKey, 3600, JSON.stringify(result)); // Cache for 1 hour
     }
 
     res.json({
@@ -172,8 +177,8 @@ router.get(
 
       const cacheKey = `feed:${userId}:${category || "all"}:${sort}:page${page || 1}:${limit}`;
 
-      if (redisClient) {
-        const cachedFeed = await redisClient.get(cacheKey);
+      if (getRedis()) {
+        const cachedFeed = await getRedis().get(cacheKey);
         if (cachedFeed) {
           logger.debug(`Cache hit for feed: ${cacheKey}`);
           return res.json({
@@ -196,8 +201,8 @@ router.get(
         feedData.documents = await addSignedThumbnails(feedData.documents);
       }
 
-      if (redisClient && feedData.documents.length > 0) {
-        await redisClient.setEx(cacheKey, 300, JSON.stringify(feedData)); // 5 minutes TTL
+      if (getRedis() && feedData.documents.length > 0) {
+        await getRedis().setEx(cacheKey, 300, JSON.stringify(feedData)); // 5 minutes TTL
       }
 
       res.json({
@@ -298,8 +303,8 @@ router.get(
         category || "all"
       }:${sort || "relevant"}:${page}:${limit}`;
 
-      if (redisClient) {
-        const cached = await redisClient.get(cacheKey);
+      if (getRedis()) {
+        const cached = await getRedis().get(cacheKey);
         if (cached) {
           logger.debug(`Cache hit for search: ${cacheKey}`);
           return res.json({
@@ -325,8 +330,8 @@ router.get(
         );
       }
 
-      if (redisClient && searchResults.documents.length > 0) {
-        await redisClient.setEx(cacheKey, 600, JSON.stringify(searchResults));
+      if (getRedis() && searchResults.documents.length > 0) {
+        await getRedis().setEx(cacheKey, 600, JSON.stringify(searchResults));
       }
 
       res.json({
@@ -382,8 +387,8 @@ router.get(
       const { timeframe, limit } = req.query;
       const cacheKey = `trending:${timeframe}:${limit}`;
 
-      if (redisClient) {
-        const cached = await redisClient.get(cacheKey);
+      if (getRedis()) {
+        const cached = await getRedis().get(cacheKey);
         if (cached) {
           return res.json({
             success: true,
@@ -426,8 +431,8 @@ router.get(
 
       const docsWithThumbnails = await addSignedThumbnails(trendingDocs);
 
-      if (redisClient) {
-        await redisClient.setEx(
+      if (getRedis()) {
+        await getRedis().setEx(
           cacheKey,
           900,
           JSON.stringify(docsWithThumbnails),
@@ -449,8 +454,8 @@ router.get("/categories", async (req, res, next) => {
   try {
     const cacheKey = "categories:counts";
 
-    if (redisClient) {
-      const cached = await redisClient.get(cacheKey);
+    if (getRedis()) {
+      const cached = await getRedis().get(cacheKey);
       if (cached) {
         return res.json({
           success: true,
@@ -461,8 +466,8 @@ router.get("/categories", async (req, res, next) => {
 
     const categories = await getCategoryCounts();
 
-    if (redisClient) {
-      await redisClient.setEx(cacheKey, 3600, JSON.stringify(categories));
+    if (getRedis()) {
+      await getRedis().setEx(cacheKey, 3600, JSON.stringify(categories));
     }
 
     res.json({
@@ -496,8 +501,8 @@ router.get(
 
       const cacheKey = `feed:personalized:${userId}:${category || "all"}:${sort}:page${page || 1}:${limit}`;
 
-      if (redisClient) {
-        const cachedFeed = await redisClient.get(cacheKey);
+      if (getRedis()) {
+        const cachedFeed = await getRedis().get(cacheKey);
         if (cachedFeed) {
           logger.debug(`Cache hit for personalized feed: ${cacheKey}`);
           return res.json({
@@ -521,8 +526,8 @@ router.get(
         feedData.documents = await addSignedThumbnails(feedData.documents);
       }
 
-      if (redisClient && feedData.documents.length > 0) {
-        await redisClient.setEx(cacheKey, 180, JSON.stringify(feedData));
+      if (getRedis() && feedData.documents.length > 0) {
+        await getRedis().setEx(cacheKey, 180, JSON.stringify(feedData));
       }
 
       res.json({
@@ -566,7 +571,7 @@ router.post(
       );
 
       // Invalidate relevant redis caches
-      if (redisClient) {
+      if (getRedis()) {
         // Clear specific feed caches for this user
         const feedPattern = `feed:${userId}:*`;
         const personalizedFeedPattern = `feed:personalized:${userId}:*`;
@@ -584,9 +589,9 @@ router.post(
 
         // Simple strategy: Clear the most likely keys or just wait for TTL.
 
-        const keys = await redisClient.keys(`feed:*${userId}*`);
+        const keys = await getRedis().keys(`feed:*${userId}*`);
         if (keys.length > 0) {
-          await redisClient.del(keys);
+          await getRedis().del(keys);
         }
       }
 
@@ -716,7 +721,11 @@ async function performSearch({ query, type, category, sort = "relevant", page, l
         .sort(sortOrder)
         .skip(skip)
         .limit(limit),
-      Document.countDocuments(searchQuery),
+      // The total is only used to render "N results" and decide hasMore, so a
+      // slightly stale number is fine and saves a second full text scan.
+      cachedCount(`search:${type}:${query}`, 120, () =>
+        Document.countDocuments(searchQuery),
+      ),
     ]);
 
     return {
@@ -757,6 +766,14 @@ async function getRelatedDocuments(documentId, limit) {
 }
 
 async function getTrendingDocuments(timeframe, limit) {
+  // The trending score is derived from counters that only move every flush
+  // interval, so recomputing the whole ranking per request buys nothing.
+  return cachedCount(`feed:trending:${timeframe}:${limit}`, 120, () =>
+    computeTrendingDocuments(timeframe, limit),
+  );
+}
+
+async function computeTrendingDocuments(timeframe, limit) {
   const timeFilter = getTimeFilter(timeframe);
 
   const trendingDocs = await Document.aggregate([
@@ -813,25 +830,27 @@ async function getTrendingDocuments(timeframe, limit) {
 }
 
 async function getCategoryCounts() {
-  const counts = await Document.aggregate([
-    {
-      $match: {
-        status: "processed",
-        visibility: "public",
+  // A full $group over every public document. The answer moves slowly, so it
+  // is cached rather than recomputed per request.
+  return cachedCount("feed:categories", 300, () =>
+    Document.aggregate([
+      {
+        $match: {
+          status: "processed",
+          visibility: "public",
+        },
       },
-    },
-    {
-      $group: {
-        _id: "$category",
-        count: { $sum: 1 },
+      {
+        $group: {
+          _id: "$category",
+          count: { $sum: 1 },
+        },
       },
-    },
-    {
-      $sort: { count: -1 },
-    },
-  ]);
-
-  return counts;
+      {
+        $sort: { count: -1 },
+      },
+    ]),
+  );
 }
 
 function getTimeFilter(timeframe) {

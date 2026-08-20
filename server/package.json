@@ -7,9 +7,10 @@
     "dev": "nodemon --env-file=.env server.js",
     "start": "node --env-file=.env server.js",
     "test": "NODE_ENV=test jest",
+    "test:unit": "node --test shared/utils/__tests__/storage.test.mjs",
     "test:watch": "NODE_ENV=test jest --watch",
     "lint": "eslint .",
-    "migrate": "node shared/database/migrate.js"
+    "migrate": "node --env-file=.env shared/database/migrate.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.922.0",

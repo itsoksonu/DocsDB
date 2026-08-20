@@ -6,7 +6,7 @@ import Document from '../../shared/models/Document.js';
 import { trackDownload } from '../../shared/utils/analytics.js';
 import { trackMonetizationEvent } from '../../shared/utils/monetizationEngine.js';
 import S3Manager from '../../shared/utils/s3.js';
-import databaseManager from '../../shared/database/connection.js';
+import { getRedis } from '../../shared/utils/redis.js';
 import { 
   createDownloadSession, 
   validateDownloadRequest,
@@ -17,7 +17,6 @@ import logger from '../../shared/utils/logger.js';
 
 const router = express.Router();
 
-const redisClient = databaseManager.getRedisClient();
 
 // Request download (starts download session with ad)
 router.post('/:id/request',
@@ -212,8 +211,8 @@ router.post('/ad/view',
       const userId = req.user.userId;
 
       const sessionKey = `download:session:${sessionId}`;
-      if (redisClient) {
-        const sessionData = await redisClient.get(sessionKey);
+      if (getRedis()) {
+        const sessionData = await getRedis().get(sessionKey);
         if (!sessionData) {
           return res.status(404).json({
             success: false,
@@ -231,7 +230,7 @@ router.post('/ad/view',
 
         session.adViewed = true;
         session.adViewedAt = new Date().toISOString();
-        await redisClient.setEx(sessionKey, session.ttl, JSON.stringify(session));
+        await getRedis().setEx(sessionKey, session.ttl, JSON.stringify(session));
       }
 
       await trackAdView(adId, userId);
@@ -289,8 +288,8 @@ async function getDownloadHistory(userId, page, limit) {
   // For now, we'll use Redis or mock data
   const cacheKey = `downloads:user:${userId}:${page}:${limit}`;
   
-  if (redisClient) {
-    const cached = await redisClient.get(cacheKey);
+  if (getRedis()) {
+    const cached = await getRedis().get(cacheKey);
     if (cached) {
       return JSON.parse(cached);
     }
@@ -307,8 +306,8 @@ async function getDownloadHistory(userId, page, limit) {
     }
   };
 
-  if (redisClient) {
-    await redisClient.setEx(cacheKey, 300, JSON.stringify(mockHistory));
+  if (getRedis()) {
+    await getRedis().setEx(cacheKey, 300, JSON.stringify(mockHistory));
   }
 
   return mockHistory;

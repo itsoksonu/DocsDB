@@ -17,7 +17,7 @@ import { v4 as uuidv4 } from "uuid";
 import S3Manager from "../s3.js";
 import Document from "../../models/Document.js";
 import User from "../../models/User.js";
-import { processDocumentQueue } from "../../queues/processQueue.js";
+import { enqueueProcessing } from "../../queues/processQueue.js";
 import logger from "../logger.js";
 import { resolveAdapters } from "./categoryMap.js";
 
@@ -295,11 +295,9 @@ export async function fetchDocuments({ category, count, userId, onProgress = () 
       }
 
       // Enqueue the existing processing worker (metadata, thumbnail, embeddings…).
-      await processDocumentQueue.add(
-        "process-document",
-        { documentId: document._id.toString(), s3Key },
-        { attempts: 3, backoff: { type: "exponential", delay: 5000 } }
-      );
+      // Shares enqueueProcessing with uploads and manual retries so all three
+      // get the same attempt count, backoff and job-id de-duplication.
+      await enqueueProcessing(document._id, s3Key);
 
       logger.info("document fetched", {
         fetch_log: {

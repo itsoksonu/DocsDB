@@ -1,10 +1,12 @@
 import express from "express";
+import mongoose from "mongoose";
 import { param, query, body, validationResult } from "express-validator";
 import { authMiddleware } from "../middleware/auth.js";
 import { requireRole } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import User from "../../shared/models/User.js";
-import Document from "../../shared/models/Document.js";
+import UserWallet from "../../shared/models/UserWallet.js";
+import Document, { DOCUMENT_CATEGORIES } from "../../shared/models/Document.js";
 import Payouts from "../../shared/models/Payouts.js";
 import Report from "../../shared/models/Report.js";
 import {
@@ -17,6 +19,21 @@ import {
 import logger from "../../shared/utils/logger.js";
 import s3 from "../../shared/utils/s3.js";
 import databaseManager from "../../shared/database/connection.js";
+import { cachedCount } from "../../shared/utils/cachedCount.js";
+import SavedDocument from "../../shared/models/SavedDocument.js";
+import Earnings from "../../shared/models/Earnings.js";
+import { getDocumentViewStats } from "../../shared/utils/analytics.js";
+import { enqueueProcessing } from "../../shared/queues/processQueue.js";
+import { invalidateDocumentPreview } from "../../shared/utils/documentPreview.js";
+import {
+  regenerateThumbnail,
+  checkMetadataProviders,
+  testMetadataProvider,
+  testEmbeddingModel,
+} from "../../shared/utils/documentProcessor.js";
+import { AI_PROVIDERS } from "../../shared/models/AiSettings.js";
+import { getAiSettings, updateAiSettings } from "../../shared/utils/aiSettings.js";
+import { listAllModels } from "../../shared/utils/aiModelCatalog.js";
 
 const router = express.Router();
 
@@ -371,6 +388,8 @@ router.patch(
         });
       }
 
+      const previousStatus = user.status;
+
       user.status = status;
       user.statusReason = reason;
 
@@ -389,7 +408,7 @@ router.patch(
         action: "UPDATE_USER_STATUS",
         targetUserId: userId,
         details: {
-          previousStatus: user.status,
+          previousStatus,
           newStatus: status,
           reason,
           duration,
@@ -425,14 +444,7 @@ router.get(
 
       const { userId } = req.params;
 
-      const user = await User.findById(userId)
-        .select("-password")
-        .populate({
-          path: "documents",
-          select:
-            "generatedTitle fileType status viewsCount downloadsCount createdAt",
-          options: { limit: 10, sort: { createdAt: -1 } },
-        });
+      const user = await User.findById(userId).lean();
 
       if (!user) {
         return res.status(404).json({
@@ -441,12 +453,29 @@ router.get(
         });
       }
 
-      const userStats = await getUserStats(userId);
+      // `documents` was never a schema path or virtual, so the old populate
+      // was a silent no-op. Query them directly instead.
+      const [documents, wallet, userStats] = await Promise.all([
+        Document.find({ userId })
+          .select(
+            "generatedTitle fileType status viewsCount downloadsCount createdAt",
+          )
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .lean(),
+        UserWallet.findOne({ userId }).lean(),
+        getUserStats(userId, user),
+      ]);
 
       res.json({
         success: true,
         data: {
-          user,
+          user: {
+            ...user,
+            documents,
+            walletBalance: wallet?.balance || 0,
+            kycStatus: wallet?.kycStatus || "unverified",
+          },
           stats: userStats,
         },
       });
@@ -473,6 +502,9 @@ router.get(
         "failed",
         "rejected",
         "taken_down",
+        "duplicate",
+        "quarantined",
+        "deleted",
       ]),
     query("userId").optional().isMongoId(),
     query("search").optional().trim().isLength({ max: 100 }),
@@ -505,12 +537,26 @@ router.get(
 
       const [documents, total] = await Promise.all([
         Document.find(query)
+          // embedding is a large float array and is never rendered.
+          .select("-embedding -metadata")
           .populate("userId", "name email")
           .sort({ createdAt: -1 })
           .skip(skip)
-          .limit(parseInt(limit)),
+          .limit(parseInt(limit))
+          .lean(),
         Document.countDocuments(query),
       ]);
+
+      // Thumbnails are S3 keys; the admin table needs viewable URLs.
+      await Promise.all(
+        documents.map(async (doc) => {
+          if (doc.thumbnailS3Path) {
+            doc.thumbnailUrl = await s3
+              .generateViewUrl(doc.thumbnailS3Path)
+              .catch(() => null);
+          }
+        }),
+      );
 
       res.json({
         success: true,
@@ -526,6 +572,405 @@ router.get(
       });
     } catch (error) {
       next(error);
+    }
+  },
+);
+
+// --- AI configuration -----------------------------------------------------
+
+// Current selection, plus the live model list from each vendor so the UI never
+// offers a model that has been retired.
+router.get(
+  "/ai/settings",
+  authMiddleware,
+  requireRole(["admin"]),
+  async (req, res, next) => {
+    try {
+      const [settings, catalog] = await Promise.all([
+        getAiSettings(),
+        listAllModels(),
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          ...settings,
+          catalog,
+          // Which keys exist, never the keys themselves.
+          credentials: {
+            gemini: Boolean(process.env.GEMINI_API_KEY),
+            groq: Boolean(process.env.GROQ_API_KEY),
+            huggingface: Boolean(process.env.HUGGINGFACE_TOKEN),
+            ollama: true,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.patch(
+  "/ai/settings",
+  authMiddleware,
+  requireRole(["admin"]),
+  [
+    body("providers").optional().isArray(),
+    body("providers.*.provider").optional().isIn(AI_PROVIDERS),
+    body("providers.*.model").optional().trim().isLength({ min: 1, max: 200 }),
+    body("providers.*.enabled").optional().isBoolean(),
+    body("embeddingModel").optional().trim().isLength({ min: 1, max: 200 }),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: errors.array(),
+        });
+      }
+
+      const { providers, embeddingModel } = req.body;
+
+      // Disabling everything would silently drop the pipeline back to local
+      // heuristics, which is the failure mode this whole page exists to expose.
+      if (providers && !providers.some((entry) => entry.enabled !== false)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "At least one provider must stay enabled, otherwise titles fall back to local heuristics.",
+        });
+      }
+
+      const settings = await updateAiSettings({
+        providers,
+        embeddingModel,
+        updatedBy: req.user.userId,
+      });
+
+      await logAdminAction({
+        adminId: req.user.userId,
+        action: "UPDATE_AI_SETTINGS",
+        details: {
+          providers: settings.providers.map((p) => ({
+            provider: p.provider,
+            model: p.model,
+            enabled: p.enabled,
+          })),
+          embeddingModel: settings.embeddingModel,
+        },
+      });
+
+      res.json({ success: true, message: "AI settings saved", data: settings });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Probe one provider with a specific model, without saving it first.
+router.post(
+  "/ai/test",
+  authMiddleware,
+  requireRole(["admin"]),
+  [
+    body("provider").isIn([...AI_PROVIDERS, "embedding"]),
+    body("model").optional().trim().isLength({ min: 1, max: 200 }),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid provider or model" });
+      }
+
+      const { provider, model } = req.body;
+
+      const result =
+        provider === "embedding"
+          ? await testEmbeddingModel(model)
+          : await testMetadataProvider(provider, model);
+
+      res.json({ success: true, data: { provider, model, ...result } });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Probe every enabled provider at once - the same check migration 004 runs.
+router.post(
+  "/ai/test-all",
+  authMiddleware,
+  requireRole(["admin"]),
+  async (req, res, next) => {
+    try {
+      const [metadata, embedding] = await Promise.all([
+        checkMetadataProviders({ onlyEnabled: false }),
+        testEmbeddingModel(),
+      ]);
+
+      res.json({
+        success: true,
+        data: { ...metadata, embedding },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Everything known about one document, in one request.
+router.get(
+  "/documents/:documentId",
+  authMiddleware,
+  requireRole(["admin", "moderator"]),
+  [
+    param("documentId").isMongoId(),
+    query("days").optional().isInt({ min: 1, max: 365 }),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid parameters",
+          errors: errors.array(),
+        });
+      }
+
+      const { documentId } = req.params;
+      const days = parseInt(req.query.days, 10) || 30;
+
+      const document = await Document.findById(documentId)
+        .select("-embedding")
+        .populate("userId", "name email avatar role status createdAt")
+        .lean();
+
+      if (!document) {
+        return res.status(404).json({
+          success: false,
+          message: "Document not found",
+        });
+      }
+
+      const [
+        stats,
+        saveCount,
+        collectionCount,
+        reports,
+        reportCounts,
+        earnings,
+        thumbnailUrl,
+        ownerDocumentCount,
+      ] = await Promise.all([
+        // Real daily series from the rollups, plus lifetime totals including
+        // anything still buffered in Redis.
+        getDocumentViewStats(documentId, String(days)),
+        SavedDocument.countDocuments({ documentId }),
+        SavedDocument.countDocuments({
+          documentId,
+          collectionId: { $ne: null },
+        }),
+        Report.find({ documentId })
+          .select("type status reason severity createdAt reporterId")
+          .populate("reporterId", "name email")
+          .sort({ createdAt: -1 })
+          .limit(20)
+          .lean(),
+        Report.aggregate([
+          { $match: { documentId: new mongoose.Types.ObjectId(documentId) } },
+          { $group: { _id: "$status", count: { $sum: 1 } } },
+        ]),
+        Earnings.aggregate([
+          { $match: { documentId: new mongoose.Types.ObjectId(documentId) } },
+          {
+            $group: {
+              _id: "$type",
+              total: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+        document.thumbnailS3Path
+          ? s3.generateViewUrl(document.thumbnailS3Path).catch(() => null)
+          : Promise.resolve(null),
+        Document.countDocuments({ userId: document.userId?._id }),
+      ]);
+
+      // Processing timeline, assembled from the timestamps the pipeline writes.
+      const timeline = [
+        { step: "uploaded", at: document.createdAt },
+        { step: "processing_started", at: document.processingStartedAt || null },
+        { step: "processed", at: document.processedAt || null },
+      ].filter((entry) => entry.at);
+
+      const processingDurationMs =
+        document.processingStartedAt && document.processedAt
+          ? new Date(document.processedAt) -
+            new Date(document.processingStartedAt)
+          : null;
+
+      res.json({
+        success: true,
+        data: {
+          document: { ...document, thumbnailUrl },
+          owner: document.userId
+            ? { ...document.userId, documentCount: ownerDocumentCount }
+            : null,
+          engagement: {
+            views: stats?.totalViews ?? document.viewsCount ?? 0,
+            downloads: stats?.totalDownloads ?? document.downloadsCount ?? 0,
+            saves: saveCount,
+            savesInCollections: collectionCount,
+            viewsInPeriod: stats?.viewsInPeriod ?? 0,
+            downloadsInPeriod: stats?.downloadsInPeriod ?? 0,
+            series: stats?.viewsByDay ?? [],
+            days,
+          },
+          processing: {
+            status: document.status,
+            error: document.processingError || null,
+            retryCount: document.retryCount || 0,
+            virusScan: document.virusScanResult || null,
+            timeline,
+            durationMs: processingDurationMs,
+          },
+          moderation: {
+            reports,
+            countsByStatus: reportCounts.reduce(
+              (acc, row) => ({ ...acc, [row._id]: row.count }),
+              {},
+            ),
+            total: reportCounts.reduce((sum, row) => sum + row.count, 0),
+          },
+          earnings: {
+            byType: earnings,
+            total: earnings.reduce((sum, row) => sum + row.total, 0),
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Requeue processing for a document from the admin panel.
+router.post(
+  "/documents/:documentId/reprocess",
+  authMiddleware,
+  requireRole(["admin"]),
+  [param("documentId").isMongoId()],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid document ID" });
+      }
+
+      const { documentId } = req.params;
+      const document = await Document.findById(documentId);
+
+      if (!document) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Document not found" });
+      }
+
+      if (!document.s3Path) {
+        return res.status(409).json({
+          success: false,
+          message: "The original file is no longer available",
+        });
+      }
+
+      // Admins can requeue a run that has been going too long to be alive; the
+      // job-id de-duplication stops a genuinely live run from being doubled up.
+      const startedAt = document.processingStartedAt || document.updatedAt;
+      const stuckFor = startedAt ? Date.now() - new Date(startedAt).getTime() : Infinity;
+
+      if (document.status === "processing" && stuckFor < 30 * 60 * 1000) {
+        return res.status(409).json({
+          success: false,
+          message: "This document is already being processed",
+        });
+      }
+
+      document.status = "processing";
+      document.processingError = undefined;
+      document.processingStartedAt = new Date();
+      document.retryCount = (document.retryCount || 0) + 1;
+      await document.save();
+
+      await invalidateDocumentPreview(document._id);
+
+      try {
+        await enqueueProcessing(document._id, document.s3Path);
+      } catch (error) {
+        document.status = "failed";
+        document.processingError =
+          "Could not queue the document for processing. Please retry.";
+        await document.save();
+        throw error;
+      }
+
+      await logAdminAction({
+        adminId: req.user.userId,
+        action: "REPROCESS_DOCUMENT",
+        targetDocumentId: documentId,
+        details: { retryCount: document.retryCount },
+      });
+
+      res.json({
+        success: true,
+        message: "Document queued for reprocessing",
+        data: { documentId: document._id, status: document.status },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Rebuild only the thumbnail. Unlike a reprocess this leaves the title,
+// description, tags and category exactly as they are, including admin edits.
+router.post(
+  "/documents/:documentId/thumbnail",
+  authMiddleware,
+  requireRole(["admin"]),
+  [param("documentId").isMongoId()],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid document ID" });
+      }
+
+      const key = await regenerateThumbnail(req.params.documentId);
+      const thumbnailUrl = await s3.generateViewUrl(key).catch(() => null);
+
+      res.json({
+        success: true,
+        message: "Thumbnail regenerated",
+        data: { thumbnailS3Path: key, thumbnailUrl },
+      });
+    } catch (error) {
+      logger.error("Thumbnail regeneration failed:", error);
+      res.status(502).json({
+        success: false,
+        message: error.message || "Could not regenerate the thumbnail",
+      });
     }
   },
 );
@@ -556,60 +1001,8 @@ router.patch(
       .withMessage("Each tag must be a string"),
     body("category")
       .optional()
-      .isIn([
-        "for-you",
-        "technology",
-        "business",
-        "education",
-        "health",
-        "entertainment",
-        "sports",
-        "finance-money-management",
-        "games-activities",
-        "comics",
-        "philosophy",
-        "career-growth",
-        "politics",
-        "biography-memoir",
-        "study-aids-test-prep",
-        "law",
-        "art",
-        "science",
-        "history",
-        "erotica",
-        "lifestyle",
-        "religion-spirituality",
-        "self-improvement",
-        "language-arts",
-        "cooking-food-wine",
-        "true-crime",
-        "sheet-music",
-        "fiction",
-        "non-fiction",
-        "science-fiction",
-        "fantasy",
-        "romance",
-        "thriller-suspense",
-        "horror",
-        "poetry",
-        "graphic-novels",
-        "young-adult",
-        "children",
-        "parenting-family",
-        "marketing-sales",
-        "psychology",
-        "social-sciences",
-        "engineering",
-        "mathematics",
-        "data-science",
-        "nature-environment",
-        "travel",
-        "reference",
-        "design",
-        "news-media",
-        "professional-development",
-        "other",
-      ])
+      // Shares the schema's list so admin validation and the model cannot drift.
+      .isIn(DOCUMENT_CATEGORIES)
       .withMessage("Invalid category"),
   ],
   async (req, res, next) => {
@@ -740,17 +1133,20 @@ router.get(
 );
 
 // Helper functions
-async function getUserStats(userId) {
-  const [documentsCount, totalViews, totalDownloads, totalEarnings] =
+async function getUserStats(userId, user = null) {
+  const [documentTotals, totalEarnings] =
     await Promise.all([
-      Document.countDocuments({ userId }),
+      // One pass over the {userId, createdAt} index instead of three.
       Document.aggregate([
         { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        { $group: { _id: null, total: { $sum: "$viewsCount" } } },
-      ]),
-      Document.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        { $group: { _id: null, total: { $sum: "$downloadsCount" } } },
+        {
+          $group: {
+            _id: null,
+            documentsCount: { $sum: 1 },
+            totalViews: { $sum: "$viewsCount" },
+            totalDownloads: { $sum: "$downloadsCount" },
+          },
+        },
       ]),
       Payouts.aggregate([
         {
@@ -763,22 +1159,32 @@ async function getUserStats(userId) {
       ]),
     ]);
 
+  const totals = documentTotals[0];
+
   return {
-    documentsCount,
-    totalViews: totalViews[0]?.total || 0,
-    totalDownloads: totalDownloads[0]?.total || 0,
+    documentsCount: totals?.documentsCount || 0,
+    totalViews: totals?.totalViews || 0,
+    totalDownloads: totals?.totalDownloads || 0,
     totalEarnings: totalEarnings[0]?.total || 0,
-    joined: (await User.findById(userId)).createdAt,
+    joined: user
+      ? user.createdAt
+      : (await User.findById(userId).select("createdAt").lean())?.createdAt,
   };
 }
 
 async function getSystemHealth() {
+  // Four unfiltered collection scans ran on every dashboard poll. They are
+  // headline tiles, so a minute of staleness is invisible.
   const [userCount, documentCount, pendingModeration, failedProcesses] =
     await Promise.all([
-      User.countDocuments(),
-      Document.countDocuments(),
-      Report.countDocuments({ status: "pending" }),
-      Document.countDocuments({ status: "failed" }),
+      cachedCount("admin:users", 60, () => User.countDocuments()),
+      cachedCount("admin:documents", 60, () => Document.countDocuments()),
+      cachedCount("admin:reports:pending", 60, () =>
+        Report.countDocuments({ status: "pending" }),
+      ),
+      cachedCount("admin:documents:failed", 60, () =>
+        Document.countDocuments({ status: "failed" }),
+      ),
     ]);
 
   const dbStatus =

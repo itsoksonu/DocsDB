@@ -1,6 +1,7 @@
 import express from "express";
 import User from "../../shared/models/User.js";
 import Document from "../../shared/models/Document.js";
+import SavedDocument from "../../shared/models/SavedDocument.js";
 import JWTManager from "../../shared/utils/jwt.js";
 import { authMiddleware } from "../middleware/auth.js";
 import s3 from "../../shared/utils/s3.js";
@@ -128,10 +129,13 @@ router.get("/me", authMiddleware, async (req, res, next) => {
       });
     }
 
-    const uploadedCount = await Document.countDocuments({
-      userId: req.user.userId,
-      status: { $ne: "deleted" },
-    });
+    const [uploadedCount, savedCount] = await Promise.all([
+      Document.countDocuments({
+        userId: req.user.userId,
+        status: { $ne: "deleted" },
+      }),
+      SavedDocument.countDocuments({ userId: req.user.userId }),
+    ]);
 
     const userObj = user.toObject();
 
@@ -177,7 +181,7 @@ router.get("/me", authMiddleware, async (req, res, next) => {
         user: {
           ...userObj,
           uploadedCount,
-          savedCount: user.savedDocuments.length,
+          savedCount,
         },
       },
     });

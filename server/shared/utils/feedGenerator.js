@@ -2,6 +2,7 @@ import Document from "../models/Document.js";
 import UserInteraction from "../models/UserInteraction.js";
 import { getSponsoredDocuments } from "./adManager.js";
 import { getUserPreferences } from "./userPreferences.js";
+import { cachedCount } from "./cachedCount.js";
 import logger from "./logger.js";
 
 export async function generateFeed({
@@ -34,7 +35,15 @@ export async function generateFeed({
       }
     }
 
-    const totalDocs = await Document.countDocuments(baseQuery);
+    // Counted per feed page load. The per-user hidden-document filter is part
+    // of the cache key so one user's hidden list never leaks into another's
+    // total; without a hidden list every user shares the same cached number.
+    const hiddenKey = baseQuery._id ? `:hidden:${userId}` : "";
+    const totalDocs = await cachedCount(
+      `feed:${category || "all"}${hiddenKey}`,
+      120,
+      () => Document.countDocuments(baseQuery),
+    );
 
     const skip = (page - 1) * limit;
 
