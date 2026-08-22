@@ -6,6 +6,12 @@ import { AlertCircle } from "../../icons";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
+// The proxy is a last resort, not the default. On Netlify it runs as a
+// function, and those buffer the response rather than streaming it and cap it
+// at 6MB - so any normally-sized PDF hung on the spinner and eventually 502'd,
+// while working fine under `next dev`. Fetching the signed S3 URL directly also
+// lets pdf.js use range requests and start rendering before the whole file
+// lands. It needs a CORS policy on the bucket; see docs/s3-cors.md.
 const getProxiedUrl = (url) => `/api/pdf-proxy?url=${encodeURIComponent(url)}`;
 
 // Pages outside this many screens of the viewport are unmounted. Rendering a
@@ -13,6 +19,11 @@ const getProxiedUrl = (url) => `/api/pdf-proxy?url=${encodeURIComponent(url)}`;
 const RENDER_WINDOW = 2;
 
 const PAGE_GAP = 12;
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /**
  * Continuous-scroll PDF viewer.
@@ -74,8 +85,9 @@ export const PDFViewer = ({
   onNumPages,
   onError,
 }) => {
-  const proxiedUrl = getProxiedUrl(url);
-
+  // null while we work out where to load from, then "direct" or "proxy".
+  const [source, setSource] = useState(null);
+  const [progress, setProgress] = useState(null);
   const [numPages, setNumPages] = useState(null);
   const [error, setError] = useState(false);
   const [baseWidth, setBaseWidth] = useState(0);
@@ -254,18 +266,74 @@ export const PDFViewer = ({
   const onDocumentLoadSuccess = useCallback(
     (pdf) => {
       setNumPages(pdf.numPages);
+      setProgress(null);
       onNumPages?.(pdf.numPages);
     },
     [onNumPages]
   );
 
+  // A bare spinner cannot distinguish "downloading a 60MB scan" from "stuck",
+  // which is exactly the ambiguity that made this hard to diagnose.
+  const onDocumentLoadProgress = useCallback(({ loaded, total }) => {
+    setProgress({ loaded, total });
+  }, []);
+
   const onDocumentLoadError = useCallback(
     (loadError) => {
+      // Last line of defence: the probe said direct was reachable but pdf.js
+      // still could not parse the response.
+      if (source === "direct") {
+        setSource("proxy");
+        return;
+      }
+
       setError(true);
       onError?.(loadError);
     },
-    [onError]
+    [source, onError]
   );
+
+  // Work out where to load from *before* handing anything to pdf.js. Letting
+  // pdf.js discover the problem itself is not reliable - a cross-origin request
+  // the browser blocks can leave its promise pending rather than rejecting,
+  // which shows as a spinner that never resolves and no error to fall back on.
+  //
+  // The probe is a plain GET with no custom headers, deliberately. Adding a
+  // Range header would make it a preflighted request, and `Range` is not on the
+  // CORS safelist - so a bucket policy that allows ordinary GETs but does not
+  // list Range would fail the probe and send every PDF to the proxy, even
+  // though loading it directly works fine. A HEAD is no good either: presigned
+  // URLs are signed per-method, so HEAD against a GET signature is rejected.
+  //
+  // fetch resolves as soon as the headers arrive, so the body is aborted rather
+  // than downloaded twice.
+  useEffect(() => {
+    if (!url) return undefined;
+
+    let cancelled = false;
+    setSource(null);
+    setError(false);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+
+    fetch(url, { method: "GET", signal: controller.signal })
+      .then((response) => {
+        controller.abort();
+        if (!cancelled) setSource(response.ok ? "direct" : "proxy");
+      })
+      .catch(() => {
+        // Missing bucket CORS, an expired signature, or the probe timing out.
+        if (!cancelled) setSource("proxy");
+      })
+      .finally(() => clearTimeout(timer));
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [url]);
 
   if (error) {
     return (
@@ -273,6 +341,9 @@ export const PDFViewer = ({
         <AlertCircle size={28} className="text-red-400" />
         <p className="text-sm text-center">
           This PDF could not be displayed. You can still download it.
+        </p>
+        <p className="text-xs text-dark-500 text-center">
+          Tried loading {source === "proxy" ? "through the proxy" : "directly"}.
         </p>
       </div>
     );
@@ -288,13 +359,38 @@ export const PDFViewer = ({
       className="w-full h-full overflow-auto bg-dark-800 px-2 py-3 overscroll-contain"
       style={{ WebkitOverflowScrolling: "touch" }}
     >
+      {!source ? (
+        <div className="w-full h-full flex items-center justify-center py-16">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+        </div>
+      ) : (
       <Document
-        file={proxiedUrl}
+        // Remount on a source switch so pdf.js starts a clean load rather than
+        // reusing the state of the request that failed.
+        key={source}
+        file={source === "proxy" ? getProxiedUrl(url) : url}
         onLoadSuccess={onDocumentLoadSuccess}
+        onLoadProgress={onDocumentLoadProgress}
         onLoadError={onDocumentLoadError}
         loading={
-          <div className="w-full h-full flex items-center justify-center py-16">
+          <div className="w-full h-full flex flex-col items-center justify-center gap-3 py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+            {progress?.total > 0 && (
+              <>
+                <div className="w-48 h-1 rounded-full bg-dark-700 overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 transition-[width] duration-200"
+                    style={{
+                      width: `${Math.min(100, (progress.loaded / progress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-dark-400 tabular-nums">
+                  {formatBytes(progress.loaded)} of {formatBytes(progress.total)}
+                  {source === "proxy" && " · via proxy"}
+                </p>
+              </>
+            )}
           </div>
         }
         error=""
@@ -320,6 +416,7 @@ export const PDFViewer = ({
             )
           )}
       </Document>
+      )}
     </div>
   );
 };

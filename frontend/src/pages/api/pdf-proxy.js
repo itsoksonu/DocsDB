@@ -41,18 +41,37 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Pass the browser's Range header through to S3. Without this the proxy can
+    // only ever answer with the whole file, so pdf.js has to download every byte
+    // of a document before it can draw page one - which on a large scanned PDF
+    // is indistinguishable from a hang. With it, pdf.js fetches the cross
+    // reference table and the first page and renders almost immediately.
+    const range = req.headers.range;
+
     const response = await axios.get(url, {
       responseType: "stream",
       timeout: 60000,
       // Never follow a redirect out of the allowlist.
       maxRedirects: 0,
-      validateStatus: (status) => status === 200,
+      headers: range ? { Range: range } : undefined,
+      // 206 is the expected answer to a ranged request, so it has to be as
+      // acceptable as 200 or every range fetch would throw.
+      validateStatus: (status) => status === 200 || status === 206,
     });
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Cache-Control", "private, max-age=3600");
     res.setHeader("X-Content-Type-Options", "nosniff");
 
+    // Advertising range support and the total size is what makes pdf.js issue
+    // ranged requests in the first place; it will not try without them.
+    res.setHeader("Accept-Ranges", "bytes");
+    for (const header of ["content-length", "content-range"]) {
+      const value = response.headers[header];
+      if (value) res.setHeader(header, value);
+    }
+
+    res.status(response.status);
     response.data.pipe(res);
 
     response.data.on("error", (error) => {

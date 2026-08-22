@@ -19,6 +19,28 @@ const nextConfig = {
   webpack: (config) => {
     // Required for react-pdf / pdfjs-dist to work with Next.js
     config.resolve.alias.canvas = false;
+
+    // react-pdf does `import * as pdfjs from "pdfjs-dist"`, which resolves to
+    // build/pdf.mjs. That file uses `import.meta`, and in development Next
+    // wraps every module in eval() for source maps - where `import.meta` is
+    // illegal. The module throws on its first line:
+    //
+    //   TypeError: Object.defineProperty called on non-object
+    //     at __webpack_require__.r
+    //     at ./node_modules/pdfjs-dist/build/pdf.mjs
+    //
+    // react-pdf, and then PDFViewer, fail to load with it, so the viewer sits
+    // on next/dynamic's loading spinner for ever with no error rendered.
+    // Setting `config.devtool` is not an option: Next reverts devtool changes
+    // in development. The minified build does not trip the same path, so point
+    // the bare specifier at it. Same version, same API, and less code shipped.
+    //
+    // Verified by compiling this import with Next's own bundled webpack: every
+    // eval* devtool throws the above, every non-eval one loads, and the alias
+    // loads under eval-source-map.
+    config.resolve.alias["pdfjs-dist$"] =
+      "pdfjs-dist/build/pdf.min.mjs";
+
     return config;
   },
   images: {

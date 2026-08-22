@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { apiService } from "../../services/api";
+import { useRawFile } from "../../hooks/useRawFile";
 import { NativePreview } from "./NativePreview";
 import {
   ZoomIn,
@@ -10,10 +11,47 @@ import {
   Download,
   ChevronUp,
   ChevronDown,
+  AlertCircle,
 } from "../../icons";
 
+/**
+ * next/dynamic has no error state: if the loader rejects, it leaves the
+ * `loading` component mounted forever. Every failure inside one of these
+ * chunks - a module that throws while evaluating, a bad interop, a chunk that
+ * never arrives - therefore looks identical to "still loading", with no error
+ * anywhere in the UI. This turns that silence into a message.
+ */
+function chunkFailure(label, error) {
+  console.error(`[DocumentViewer] failed to load the ${label} chunk:`, error);
+
+  const Failed = ({ onDownload }) => (
+    <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-dark-800">
+      <AlertCircle size={28} className="text-red-400" />
+      <p className="text-sm text-dark-200">The {label} failed to load.</p>
+      <p className="text-xs text-dark-500 max-w-sm break-words font-mono">
+        {String(error?.message || error)}
+      </p>
+      {onDownload && (
+        <button
+          onClick={onDownload}
+          className="mt-1 flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm transition-colors"
+        >
+          <Download size={16} />
+          Download instead
+        </button>
+      )}
+    </div>
+  );
+
+  return Failed;
+}
+
 const PDFViewer = dynamic(
-  () => import("./PDFViewer").then((m) => m.PDFViewer),
+  // The import() stays inline so Next's dynamic transform can still see it.
+  () =>
+    import("./PDFViewer")
+      .then((m) => m.PDFViewer)
+      .catch((error) => chunkFailure("PDF viewer", error)),
   {
     ssr: false,
     loading: () => (
@@ -23,6 +61,38 @@ const PDFViewer = dynamic(
     ),
   }
 );
+
+const lazyViewer = (loader) =>
+  dynamic(loader, {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-full flex items-center justify-center bg-dark-800">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+      </div>
+    ),
+  });
+
+// Each of these pulls in a sizeable parser (docx-preview, pptx-preview with
+// echarts, exceljs), so they load only for the file type that needs them.
+const DocxPreview = lazyViewer(() =>
+  import("./DocxPreview")
+    .then((m) => m.DocxPreview)
+    .catch((error) => chunkFailure("Word viewer", error))
+);
+const PptxPreview = lazyViewer(() =>
+  import("./PptxPreview")
+    .then((m) => m.PptxPreview)
+    .catch((error) => chunkFailure("slide viewer", error))
+);
+const SheetViewer = lazyViewer(() =>
+  import("./SheetViewer")
+    .then((m) => m.SheetViewer)
+    .catch((error) => chunkFailure("spreadsheet viewer", error))
+);
+
+// Types we render from the original bytes rather than from a server-side text
+// extraction. Anything else falls straight through to the text preview.
+const CLIENT_RENDERED = new Set(["docx", "pptx", "xlsx", "csv"]);
 
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
@@ -47,22 +117,54 @@ function nextZoom(current, direction) {
 export const DocumentViewer = ({ document: doc, viewUrl, onDownload }) => {
   const fileType = doc?.fileType?.toLowerCase();
   const isPdf = fileType === "pdf";
+  const isClientRendered = CLIENT_RENDERED.has(fileType);
 
   const [scale, setScale] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [numPages, setNumPages] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Set when rendering the original bytes is not possible - the file is too
+  // large to parse in the browser, the bucket's CORS policy is missing, or the
+  // parser choked on the document. The server's text extraction is worse but it
+  // is better than an error card.
+  const [useFallback, setUseFallback] = useState(!isPdf && !isClientRendered);
+
   const [preview, setPreview] = useState(null);
-  const [previewLoading, setPreviewLoading] = useState(!isPdf);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(false);
 
   const frameRef = useRef(null);
 
   const documentKey = doc?.slug || doc?._id;
 
+  const {
+    buffer,
+    loading: rawLoading,
+    error: rawError,
+  } = useRawFile(
+    isClientRendered && !useFallback ? viewUrl : null,
+    doc?.sizeBytes
+  );
+
   useEffect(() => {
-    if (isPdf || !documentKey) return;
+    // Without a signed URL there are no bytes to render, so those documents go
+    // straight to the text preview too.
+    setUseFallback(!isPdf && (!isClientRendered || !viewUrl));
+    setNumPages(null);
+    setCurrentPage(1);
+  }, [documentKey, isPdf, isClientRendered, viewUrl]);
+
+  useEffect(() => {
+    if (rawError) setUseFallback(true);
+  }, [rawError]);
+
+  const onRenderError = useCallback(() => setUseFallback(true), []);
+
+  // Only fetched once the faithful path has been ruled out, so the common case
+  // costs no extra request.
+  useEffect(() => {
+    if (!useFallback || !documentKey) return undefined;
 
     let cancelled = false;
     setPreviewLoading(true);
@@ -84,7 +186,7 @@ export const DocumentViewer = ({ document: doc, viewUrl, onDownload }) => {
     return () => {
       cancelled = true;
     };
-  }, [documentKey, isPdf]);
+  }, [documentKey, useFallback]);
 
   // Keep local state in sync when the user leaves fullscreen with Escape or
   // the system back gesture rather than our button.
@@ -141,6 +243,78 @@ export const DocumentViewer = ({ document: doc, viewUrl, onDownload }) => {
 
   const zoomLabel = `${Math.round(scale * 100)}%`;
 
+  const renderBody = () => {
+    if (isPdf) {
+      return viewUrl ? (
+        <PDFViewer
+          url={viewUrl}
+          scale={scale}
+          onScaleChange={setScale}
+          onPageChange={setCurrentPage}
+          onNumPages={setNumPages}
+          // Ignored by the viewer itself; used by the chunk-failure fallback.
+          onDownload={onDownload}
+        />
+      ) : (
+        <NativePreview error onDownload={onDownload} />
+      );
+    }
+
+    if (isClientRendered && !useFallback) {
+      if (rawLoading || !buffer) {
+        return (
+          <div className="w-full h-full flex items-center justify-center bg-dark-800">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+          </div>
+        );
+      }
+
+      if (fileType === "docx") {
+        return (
+          <DocxPreview
+            buffer={buffer}
+            onDownload={onDownload}
+            scale={scale}
+            onNumPages={setNumPages}
+            onRenderError={onRenderError}
+          />
+        );
+      }
+
+      if (fileType === "pptx") {
+        return (
+          <PptxPreview
+            buffer={buffer}
+            onDownload={onDownload}
+            scale={scale}
+            onNumPages={setNumPages}
+            onRenderError={onRenderError}
+          />
+        );
+      }
+
+      return (
+        <SheetViewer
+          buffer={buffer}
+          onDownload={onDownload}
+          fileType={fileType}
+          scale={scale}
+          onRenderError={onRenderError}
+        />
+      );
+    }
+
+    return (
+      <NativePreview
+        preview={preview}
+        loading={previewLoading}
+        error={previewError}
+        scale={scale}
+        onDownload={onDownload}
+      />
+    );
+  };
+
   return (
     <div
       ref={frameRef}
@@ -188,7 +362,7 @@ export const DocumentViewer = ({ document: doc, viewUrl, onDownload }) => {
           </button>
         </div>
 
-        {isPdf && numPages > 1 && (
+        {numPages > 1 && (
           <div className="flex items-center gap-1">
             <button
               onClick={() => goToPage(Math.max(1, currentPage - 1))}
@@ -230,29 +404,7 @@ export const DocumentViewer = ({ document: doc, viewUrl, onDownload }) => {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0">
-        {isPdf ? (
-          viewUrl ? (
-            <PDFViewer
-              url={viewUrl}
-              scale={scale}
-              onScaleChange={setScale}
-              onPageChange={setCurrentPage}
-              onNumPages={setNumPages}
-            />
-          ) : (
-            <NativePreview error onDownload={onDownload} />
-          )
-        ) : (
-          <NativePreview
-            preview={preview}
-            loading={previewLoading}
-            error={previewError}
-            scale={scale}
-            onDownload={onDownload}
-          />
-        )}
-      </div>
+      <div className="flex-1 min-h-0">{renderBody()}</div>
     </div>
   );
 };
