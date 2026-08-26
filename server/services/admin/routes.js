@@ -10,13 +10,13 @@ import Document, { DOCUMENT_CATEGORIES } from "../../shared/models/Document.js";
 import Payouts from "../../shared/models/Payouts.js";
 import Report from "../../shared/models/Report.js";
 import {
-  moderateContent,
   processReport,
   generateAdminStats,
   takeDownDocument,
   restoreDocument,
 } from "../../shared/utils/moderationEngine.js";
 import logger from "../../shared/utils/logger.js";
+import { escapeRegex } from "../../shared/utils/regex.js";
 import s3 from "../../shared/utils/s3.js";
 import databaseManager from "../../shared/database/connection.js";
 import { cachedCount } from "../../shared/utils/cachedCount.js";
@@ -37,6 +37,14 @@ import { getAiSettings, updateAiSettings } from "../../shared/utils/aiSettings.j
 import { listAllModels } from "../../shared/utils/aiModelCatalog.js";
 
 const router = express.Router();
+
+// rateLimitMiddleware was imported here but never applied to a single one of the
+// 19 admin routes. These are all auth + role gated, so this is defence in depth
+// rather than the primary control - but several of them are expensive
+// (aggregations, thumbnail regeneration, reprocess enqueues) and a compromised
+// or careless admin session should not be able to hammer them. Applied to the
+// whole router so no future route can be added without it.
+router.use(rateLimitMiddleware("api"));
 
 // Admin dashboard statistics
 router.get(
@@ -68,7 +76,7 @@ router.get(
       .isIn(["pending", "approved", "rejected", "escalated"])
       .default("pending"),
     query("type").optional().isIn(["upload", "report", "dmca"]),
-    query("page").optional().isInt({ min: 1 }).default(1),
+    query("page").optional().isInt({ min: 1, max: 1000 }).default(1),
     query("limit").optional().isInt({ min: 1, max: 100 }).default(50),
   ],
   async (req, res, next) => {
@@ -280,7 +288,7 @@ router.get(
   authMiddleware,
   requireRole(["admin"]),
   [
-    query("page").optional().isInt({ min: 1 }).default(1),
+    query("page").optional().isInt({ min: 1, max: 1000 }).default(1),
     query("limit").optional().isInt({ min: 1, max: 100 }).default(50),
     query("search").optional().trim().isLength({ max: 100 }),
     query("role").optional().isIn(["user", "creator", "moderator", "admin"]),
@@ -305,9 +313,10 @@ router.get(
       if (status) query.status = status;
 
       if (search) {
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { name: { $regex: search, $options: "i" } },
-          { email: { $regex: search, $options: "i" } },
+          { name: { $regex: safeSearch, $options: "i" } },
+          { email: { $regex: safeSearch, $options: "i" } },
         ];
       }
 
@@ -492,7 +501,7 @@ router.get(
   authMiddleware,
   requireRole(["admin", "moderator"]),
   [
-    query("page").optional().isInt({ min: 1 }).default(1),
+    query("page").optional().isInt({ min: 1, max: 1000 }).default(1),
     query("limit").optional().isInt({ min: 1, max: 100 }).default(50),
     query("status")
       .optional()
@@ -529,10 +538,11 @@ router.get(
       if (userId) query.userId = userId;
 
       if (search) {
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { generatedTitle: { $regex: search, $options: "i" } },
-          { originalFilename: { $regex: search, $options: "i" } },
-          { generatedDescription: { $regex: search, $options: "i" } },
+          { generatedTitle: { $regex: safeSearch, $options: "i" } },
+          { originalFilename: { $regex: safeSearch, $options: "i" } },
+          { generatedDescription: { $regex: safeSearch, $options: "i" } },
         ];
       }
 
@@ -968,10 +978,12 @@ router.post(
         data: { thumbnailS3Path: key, thumbnailUrl },
       });
     } catch (error) {
+      // Keep the detail in the log only - error.message here carries S3 keys and
+      // local rasterizer paths.
       logger.error("Thumbnail regeneration failed:", error);
       res.status(502).json({
         success: false,
-        message: error.message || "Could not regenerate the thumbnail",
+        message: "Could not regenerate the thumbnail",
       });
     }
   },

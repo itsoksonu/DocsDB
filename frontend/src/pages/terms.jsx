@@ -38,7 +38,7 @@ export default function TermsOfService() {
                 </h2>
                 <p className="mb-4">
                   Permission is granted to temporarily download one copy of the
-                  materials (information or software) on DocsDB's website for
+                  materials (information or software) on DocsDB&apos;s website for
                   personal, non-commercial transitory viewing only. This is the
                   grant of a license, not a transfer of title, and under this
                   license you may not:
@@ -51,14 +51,14 @@ export default function TermsOfService() {
                   </li>
                   <li>
                     attempt to decompile or reverse engineer any software
-                    contained on DocsDB's website;
+                    contained on DocsDB&apos;s website;
                   </li>
                   <li>
                     remove any copyright or other proprietary notations from the
                     materials; or
                   </li>
                   <li>
-                    transfer the materials to another person or "mirror" the
+                    transfer the materials to another person or &ldquo;mirror&rdquo; the
                     materials on any other server.
                   </li>
                 </ul>
@@ -88,7 +88,7 @@ export default function TermsOfService() {
                   4. Disclaimer
                 </h2>
                 <p>
-                  The materials on DocsDB's website are provided on an 'as is'
+                  The materials on DocsDB&apos;s website are provided on an &apos;as is&apos;
                   basis. DocsDB makes no warranties, expressed or implied, and
                   hereby disclaims and negates all other warranties including,
                   without limitation, implied warranties or conditions of
@@ -106,7 +106,7 @@ export default function TermsOfService() {
                   In no event shall DocsDB or its suppliers be liable for any
                   damages (including, without limitation, damages for loss of
                   data or profit, or due to business interruption) arising out
-                  of the use or inability to use the materials on DocsDB's
+                  of the use or inability to use the materials on DocsDB&apos;s
                   website, even if DocsDB or a DocsDB authorized representative
                   has been notified orally or in writing of the possibility of
                   such damage.

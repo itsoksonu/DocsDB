@@ -1,10 +1,7 @@
 import crypto from "crypto";
 import { tmpdir } from "os";
-import { join, dirname } from "path";
+import { join } from "path";
 import path from "path";
-import { fileURLToPath } from "url";
-import { promisify } from "util";
-import { exec } from "child_process";
 import Document from "../models/Document.js";
 import S3Manager from "./s3.js";
 import logger from "./logger.js";
@@ -14,7 +11,6 @@ import { HfInference } from "@huggingface/inference";
 import Groq from "groq-sdk";
 
 const require = createRequire(import.meta.url);
-const execAsync = promisify(exec);
 
 let pdfParse;
 try {
@@ -38,7 +34,7 @@ import {
 } from "./thumbnails.js";
 import { generateSlug } from "./slug.js";
 import { normalizeCategory, clampText } from "./categories.js";
-import { generateUniversalTitle, isUsableTitle } from "./titles.js";
+import { generateUniversalTitle } from "./titles.js";
 import {
   getAiSettings,
   getActiveProviders,
@@ -112,7 +108,25 @@ if (!PDFJS_ASSET_DIR) {
 // instance, so the only reliable suppression point is the shared process console.
 // We filter ONLY pdf.js's "Warning:" lines, and only for the duration of the
 // pdfToImg() call, then log a single summary count.
+//
+// Reentrancy matters here: four Bull processors run in this process, so two jobs
+// can be inside this function at once. Nesting the patch would make the inner
+// call capture the already-patched console and restore *that* as the permanent
+// one, leaving suppression on forever and leaking a closure per overlap. The
+// depth counter makes every nested call a pass-through.
+let pdfWarningSuppressDepth = 0;
+
 async function runWithPdfWarningsSuppressed(label, fn) {
+  if (pdfWarningSuppressDepth > 0) {
+    pdfWarningSuppressDepth++;
+    try {
+      return await fn();
+    } finally {
+      pdfWarningSuppressDepth--;
+    }
+  }
+
+  pdfWarningSuppressDepth++;
   const origLog = console.log;
   const origWarn = console.warn;
   let suppressed = 0;
@@ -135,6 +149,7 @@ async function runWithPdfWarningsSuppressed(label, fn) {
   try {
     return await fn();
   } finally {
+    pdfWarningSuppressDepth--;
     console.log = origLog;
     console.warn = origWarn;
     if (suppressed > 0) {
@@ -167,8 +182,9 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 //   text-embedding-004    shut down 2026-01-14, superseded by gemini-embedding-2
 // When one of these is retired again, set the env var rather than editing code.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
-const GEMINI_EMBEDDING_MODEL =
-  process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
+// GEMINI_EMBEDDING_MODEL is not declared here: it was an unused duplicate of the
+// one in shared/utils/aiSettings.js:25, which is the copy that is actually read.
+// Two defaults for the same env var is how they drift apart.
 const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 const HUGGINGFACE_MODEL =
   process.env.HUGGINGFACE_MODEL || "mistralai/Mistral-7B-Instruct-v0.3";
@@ -223,9 +239,6 @@ async function ensureDependencies() {
     XLSX = (await import("xlsx")).default;
   }
 }
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 export async function processDocument(
   documentId,
@@ -1049,6 +1062,7 @@ async function generateThumbnail(filePath, fileType, content) {
 
 async function generatePDFFirstPageThumbnail(filePath) {
   const fs = await import("fs");
+  let outPath;
 
   try {
     logger.info("Generating first-page PDF thumbnail (pdftoimg-js)...", {
@@ -1073,7 +1087,7 @@ async function generatePDFFirstPageThumbnail(filePath) {
     const base64 = imgSrc.includes(",") ? imgSrc.split(",")[1] : imgSrc;
     const buffer = Buffer.from(base64, "base64");
 
-    const outPath = path.join(
+    outPath = path.join(
       tmpdir(),
       `pdf-thumb-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
     );
@@ -1092,6 +1106,13 @@ async function generatePDFFirstPageThumbnail(filePath) {
       error: err.message,
       stack: err.stack,
     });
+
+    // Callers only ever clean up the path this function *returns*, and the
+    // fallback below returns a different one - so a partial write here would
+    // never be collected.
+    if (outPath) {
+      await fs.promises.unlink(outPath).catch(() => {});
+    }
 
     // Fallback: generic thumbnail
     return await generateFallbackThumbnail("pdf");
@@ -1119,9 +1140,10 @@ async function downloadFromS3(s3Key) {
     tmpdir(),
     `docsdb-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
   );
+  const fs = await import("fs");
+  let objectData;
   try {
-    const objectData = await S3Manager.getObject(s3Key);
-    const fs = await import("fs");
+    objectData = await S3Manager.getObject(s3Key);
     if (objectData.Body) {
       const chunks = [];
       for await (const chunk of objectData.Body) chunks.push(chunk);
@@ -1130,6 +1152,12 @@ async function downloadFromS3(s3Key) {
     } else throw new Error("No body in S3 response");
     return tmpPath;
   } catch (error) {
+    // On failure this function never returns tmpPath, so processDocument's
+    // finally block has nothing to clean up - the partial file would stay in
+    // os.tmpdir() forever, once per retry. Same for the unread response body,
+    // which holds a socket until GC.
+    objectData?.Body?.destroy?.();
+    await fs.promises.unlink(tmpPath).catch(() => {});
     logger.error("Error downloading from S3:", error);
     throw error;
   }
@@ -1717,7 +1745,7 @@ function generateUniversalMetadata(content, filename, fileType) {
 }
 
 
-function generateUniversalDescription(content, fileType) {
+function generateUniversalDescription(content, _fileType) {
   const paragraphs = content
     .split(/\n\s*\n/)
     .filter((p) => p.trim().length > 50);
@@ -1748,7 +1776,7 @@ function generateUniversalDescription(content, fileType) {
   return keySentences.join(". ") + ".";
 }
 
-function extractUniversalTags(content, title, fileType) {
+function extractUniversalTags(content, title, _fileType) {
   const allText = (content + " " + title).toLowerCase();
   const stopWords = new Set([
     "the",
@@ -1862,7 +1890,7 @@ function extractUniversalTags(content, title, fileType) {
     .filter((term) => term && term.length > 0);
 }
 
-function detectUniversalCategory(content, fileType) {
+function detectUniversalCategory(content, _fileType) {
   const categories = {
     technology: {
       keywords: [
@@ -1986,7 +2014,7 @@ function extractUniversalThemes(content) {
     .map(([theme]) => theme);
 }
 
-function generateUniversalSummary(content, fileType) {
+function generateUniversalSummary(content, _fileType) {
   if (content.length < 300) return content;
   const sentences = content
     .split(/[.!?]+/)

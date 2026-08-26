@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import AdminLayout from "../../components/admin/AdminLayout";
 import { apiService } from "../../services/api";
 import {
@@ -18,29 +18,35 @@ export default function UserManagement() {
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const fetchSeqRef = useRef(0);
 
-  useEffect(() => {
-    fetchUsers();
-  }, [page, roleFilter, statusFilter]);
-
-  // Debounced search
+  // Debounce the search term, then fetch from a single effect. Two effects both
+  // calling fetchUsers meant duplicate requests on mount and on every filter
+  // change, with no ordering guarantee between the responses.
   useEffect(() => {
     const timer = setTimeout(() => {
+      setDebouncedSearch(search);
       setPage(1);
-      fetchUsers();
     }, 500);
     return () => clearTimeout(timer);
   }, [search]);
 
-  const fetchUsers = async () => {
+  // useCallback so the effect can depend on the function rather than restating
+  // its inputs. It reads the four filter values and sets none of them.
+  const fetchUsers = useCallback(async () => {
     setLoading(true);
+
+    const seq = ++fetchSeqRef.current;
+    const isCurrent = () => seq === fetchSeqRef.current;
+
     try {
       const params = {
         page,
         limit: 10,
-        search,
+        search: debouncedSearch,
         role: roleFilter,
         status: statusFilter,
       };
@@ -49,17 +55,24 @@ export default function UserManagement() {
       Object.keys(params).forEach((key) => !params[key] && delete params[key]);
 
       const response = await apiService.getAdminUsers(params);
+      if (!isCurrent()) return;
+
       if (response && response.data) {
         setUsers(response.data.users);
         setPagination(response.data.pagination);
       }
     } catch (error) {
+      if (!isCurrent()) return;
       console.error("Error fetching users:", error);
       toast.error("Failed to load users");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  };
+  }, [page, roleFilter, statusFilter, debouncedSearch]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
   const handleStatusChange = async (userId, newStatus) => {
     try {

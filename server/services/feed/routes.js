@@ -1,10 +1,10 @@
 import express from "express";
-import { query, validationResult } from "express-validator";
+import { param, query, validationResult } from "express-validator";
 import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
 import { getRedis } from "../../shared/utils/redis.js";
-import { cachedCount } from "../../shared/utils/cachedCount.js";
+import { cachedCount, cacheToken } from "../../shared/utils/cachedCount.js";
 import { generateFeed } from "../../shared/utils/feedGenerator.js";
 import logger from "../../shared/utils/logger.js";
 import s3 from "../../shared/utils/s3.js";
@@ -20,7 +20,7 @@ const geminiAI = process.env.GEMINI_API_KEY
 
 // Input validation for feed queries
 const feedValidation = [
-  query("page").optional().isInt({ min: 1 }).default(1),
+  query("page").optional().isInt({ min: 1, max: 1000 }).default(1),
   query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
   query("category")
     .optional()
@@ -109,8 +109,10 @@ async function addSignedThumbnails(documents) {
   );
 }
 
-// Get all document IDs for sitemap
-router.get("/sitemap-ids", async (req, res, next) => {
+// Get all document IDs for sitemap. Rate limited: it is unauthenticated and
+// materializes up to 50,000 documents, and on a cold cache there is no
+// single-flight guard, so concurrent callers each run the full query.
+router.get("/sitemap-ids", rateLimitMiddleware("search"), async (req, res, next) => {
   try {
     const cacheKey = "sitemap:ids";
 
@@ -278,7 +280,7 @@ router.get(
         "professional-development",
         "other",
       ]),
-    query("page").optional().isInt({ min: 1 }).default(1),
+    query("page").optional().isInt({ min: 1, max: 1000 }).default(1),
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
     query("sort")
       .optional()
@@ -299,7 +301,8 @@ router.get(
       const { q, type, category, page, limit, sort } = req.query;
       const userId = req.user?.userId || "public";
 
-      const cacheKey = `search:${q}:${type}:${
+      // The query is hashed rather than interpolated raw - see cacheToken.
+      const cacheKey = `search:${cacheToken(q)}:${type}:${
         category || "all"
       }:${sort || "relevant"}:${page}:${limit}`;
 
@@ -348,9 +351,23 @@ router.get(
 router.get(
   "/related/:documentId",
   optionalAuthMiddleware,
-  [query("limit").optional().isInt({ min: 1, max: 20 }).default(10)],
+  rateLimitMiddleware("search"),
+  [
+    param("documentId").isMongoId(),
+    query("limit").optional().isInt({ min: 1, max: 20 }).default(10),
+  ],
   async (req, res, next) => {
     try {
+      // Without this guard the validators above are inert: `.default()` only
+      // fires when the parameter is absent, so ?limit=1000000 reached .limit()
+      // and ?limit=abc reached .limit(NaN).
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid parameters" });
+      }
+
       const { documentId } = req.params;
       const { limit } = req.query;
 
@@ -375,6 +392,7 @@ router.get(
 router.get(
   "/trending",
   optionalAuthMiddleware,
+  rateLimitMiddleware("search"),
   [
     query("timeframe")
       .optional()
@@ -384,6 +402,16 @@ router.get(
   ],
   async (req, res, next) => {
     try {
+      // Required: without it `timeframe` and `limit` are unvalidated, which
+      // means an unbounded $limit aggregation whose whole result is then cached
+      // under an attacker-chosen Redis key.
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid parameters" });
+      }
+
       const { timeframe, limit } = req.query;
       const cacheKey = `trending:${timeframe}:${limit}`;
 
@@ -570,28 +598,29 @@ router.post(
         { upsert: true, new: true },
       );
 
-      // Invalidate relevant redis caches
+      // Invalidate this user's cached feeds. The generated feed is stored whole,
+      // so without this a hide/unhide has no visible effect until the TTL.
+      //
+      // SCAN, not KEYS: this runs on every interaction write (120/min per user)
+      // and KEYS is O(keyspace) *and* blocks the single-threaded Redis server.
+      // Both key shapes are built in this file - see the cacheKey assignments in
+      // GET / and GET /personalized.
       if (getRedis()) {
-        // Clear specific feed caches for this user
-        const feedPattern = `feed:${userId}:*`;
-        const personalizedFeedPattern = `feed:personalized:${userId}:*`;
+        const redis = getRedis();
+        const patterns = [`feed:${userId}:*`, `feed:personalized:${userId}:*`];
 
-        // Note: Redis generic SCAN/DELETE for patterns is expensive in prod,
-        // but for specific user keys it's acceptable or we can just let them expire.
-        // A better approach is to rely on short TTLs or specific keys if known.
-        // Here we'll just log it for now as a production optimization todo.
-        // Alternatively, if we know exact keys we can del them.
-
-        // For now, we rely on the feed generator to filter out 'hidden' items dynamically
-        // even if the list is cached, or we can force cache bypass on client side.
-        // BUT, since we store the *generated* feed in cache, we MUST invalidate it
-        // if we want immediate effect without waiting 5 mins.
-
-        // Simple strategy: Clear the most likely keys or just wait for TTL.
-
-        const keys = await getRedis().keys(`feed:*${userId}*`);
-        if (keys.length > 0) {
-          await getRedis().del(keys);
+        for (const pattern of patterns) {
+          const batch = [];
+          for await (const key of redis.scanIterator({
+            MATCH: pattern,
+            COUNT: 100,
+          })) {
+            batch.push(key);
+            if (batch.length >= 100) {
+              await redis.del(batch.splice(0, batch.length));
+            }
+          }
+          if (batch.length > 0) await redis.del(batch);
         }
       }
 
@@ -723,7 +752,7 @@ async function performSearch({ query, type, category, sort = "relevant", page, l
         .limit(limit),
       // The total is only used to render "N results" and decide hasMore, so a
       // slightly stale number is fine and saves a second full text scan.
-      cachedCount(`search:${type}:${query}`, 120, () =>
+      cachedCount(`search:${type}:${cacheToken(query)}`, 120, () =>
         Document.countDocuments(searchQuery),
       ),
     ]);

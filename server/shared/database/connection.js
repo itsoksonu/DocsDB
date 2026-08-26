@@ -19,6 +19,15 @@ class DatabaseManager {
       this.mongoConnection = conn;
       logger.info(`MongoDB Connected: ${conn.connection.host}`);
 
+      // The try/catch above only covers the initial connect. Without these, a
+      // connection that drops after startup fails silently.
+      mongoose.connection.on("error", (error) => {
+        logger.error("MongoDB connection error:", error);
+      });
+      mongoose.connection.on("disconnected", () => {
+        logger.warn("MongoDB disconnected");
+      });
+
       return conn;
     } catch (error) {
       logger.error("MongoDB connection error:", error);
@@ -34,7 +43,15 @@ class DatabaseManager {
         socket: {
           host: process.env.REDIS_HOST,
           port: process.env.REDIS_PORT,
+          connectTimeout: 10_000,
+          // node-redis's default retries immediately and indefinitely, which
+          // turns a Redis outage into a reconnect storm. Back off instead.
+          reconnectStrategy: (retries) => Math.min(retries * 200, 5_000),
         },
+        // Commands issued while disconnected would otherwise pile up in an
+        // unbounded in-process queue and all fire at once on reconnect. Callers
+        // here already gate on isReady (see shared/utils/redis.js).
+        disableOfflineQueue: true,
       });
 
       this.redisClient.on("error", (err) => {

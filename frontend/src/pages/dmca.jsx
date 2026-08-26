@@ -63,7 +63,7 @@ export default function DMCA() {
                     A statement by you, made under penalty of perjury, that the
                     above information in your notice is accurate and that you
                     are the copyright owner or authorized to act on the
-                    copyright owner's behalf.
+                    copyright owner&apos;s behalf.
                   </li>
                 </ul>
               </section>
@@ -75,7 +75,7 @@ export default function DMCA() {
                 <p className="mb-4">
                   If you believe that your content that was removed (or to which
                   access was disabled) is not infringing, or that you have the
-                  authorization from the copyright owner, the copyright owner's
+                  authorization from the copyright owner, the copyright owner&apos;s
                   agent, or pursuant to the law, to post and use the material in
                   your content, you may send a counter-notice containing the
                   following information to the Copyright Agent:

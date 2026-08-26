@@ -17,7 +17,6 @@
  *   npm run migrate -- 005 reclaim
  */
 
-import mongoose from "mongoose";
 import Document from "../../models/Document.js";
 import StoredFile from "../../models/StoredFile.js";
 import S3Manager from "../../utils/s3.js";

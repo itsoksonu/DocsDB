@@ -100,14 +100,14 @@ export async function generateFeed({
   }
 }
 
-async function getRelevanceSort(userId) {
+async function getRelevanceSort(_userId) {
   // Placeholder for personalized relevance sorting
   // This would use user embeddings, browsing history, etc.
   // For now, fall back to popularity
   return { viewsCount: -1, createdAt: -1 };
 }
 
-async function injectAds(documents, userId) {
+async function injectAds(documents, _userId) {
   try {
     const adFrequency = 5; // Inject ad every 5 documents
     const sponsoredDocs = await getSponsoredDocuments(10); // Get more than needed

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import AdminLayout from "../../components/admin/AdminLayout";
 import { apiService } from "../../services/api";
 import { Search, Flag, CheckCircle, XCircle, AlertOctagon } from "lucide-react";
@@ -10,13 +10,14 @@ export default function ModerationQueue() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("pending");
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    fetchQueue();
-  }, [page, statusFilter]);
-
-  const fetchQueue = async () => {
+  // useCallback so the effect below can depend on the function itself rather
+  // than duplicating its inputs. Its deps are only the two values it reads, and
+  // it sets neither of them, so the identity is stable between filter changes.
+  const fetchQueue = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const response = await apiService.getModerationQueue({
         page,
@@ -27,12 +28,21 @@ export default function ModerationQueue() {
       if (response && response.data) {
         setItems(response.data.queueItems);
       }
-    } catch (error) {
-      console.error("Error fetching moderation queue:", error);
+    } catch (err) {
+      // A swallowed error here rendered "All caught up! No pending items." on a
+      // moderation queue that had simply failed to load - the worst possible
+      // failure mode for this screen.
+      console.error("Error fetching moderation queue:", err);
+      setItems([]);
+      setError("Could not load the moderation queue. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, statusFilter]);
+
+  useEffect(() => {
+    fetchQueue();
+  }, [fetchQueue]);
 
   const handleProcess = async (reportId, action) => {
     try {
@@ -75,6 +85,17 @@ export default function ModerationQueue() {
             <div className="text-center text-dark-500 py-12">
               Loading queue...
             </div>
+          ) : error ? (
+            <div className="text-center py-12 bg-dark-900 rounded-xl border border-red-900/50">
+              <AlertOctagon className="mx-auto text-red-500 mb-2" size={32} />
+              <p className="text-red-400">{error}</p>
+              <button
+                onClick={fetchQueue}
+                className="mt-4 px-4 py-2 text-sm bg-dark-800 hover:bg-dark-700 text-dark-200 rounded-lg transition-colors"
+              >
+                Retry
+              </button>
+            </div>
           ) : items.length === 0 ? (
             <div className="text-center text-dark-500 py-12 bg-dark-900 rounded-xl border border-dark-800">
               <CheckCircle
@@ -112,7 +133,7 @@ export default function ModerationQueue() {
                     <p className="text-dark-400 text-sm mt-1">
                       Reason:{" "}
                       <span className="text-dark-300 italic">
-                        "{item.reason}"
+                        &ldquo;{item.reason}&rdquo;
                       </span>
                     </p>
                     <p className="text-xs text-dark-500 mt-2">

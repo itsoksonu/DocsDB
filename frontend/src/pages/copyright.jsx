@@ -78,7 +78,7 @@ export default function Copyright() {
                   Trademarks
                 </h2>
                 <p>
-                  "DocsDB", the DocsDB logo, and any other product or service
+                  &ldquo;DocsDB&rdquo;, the DocsDB logo, and any other product or service
                   name or slogan contained in the Site are trademarks of DocsDB
                   and its suppliers or licensors, and may not be copied,
                   imitated or used, in whole or in part, without the prior

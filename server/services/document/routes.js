@@ -1,9 +1,9 @@
 import express from "express";
-import { param, query, validationResult } from "express-validator";
+import { body, param, query, validationResult } from "express-validator";
 import mongoose from "mongoose";
 import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
-import Document from "../../shared/models/Document.js";
+import Document, { DOCUMENT_CATEGORIES } from "../../shared/models/Document.js";
 import SavedDocument from "../../shared/models/SavedDocument.js";
 import UserCollection from "../../shared/models/UserCollection.js";
 import {
@@ -35,6 +35,8 @@ import { getRedis } from "../../shared/utils/redis.js";
 import S3Manager from "../../shared/utils/s3.js";
 import s3 from "../../shared/utils/s3.js";
 import logger from "../../shared/utils/logger.js";
+import { escapeRegex } from "../../shared/utils/regex.js";
+import { cacheToken } from "../../shared/utils/cachedCount.js";
 
 const router = express.Router();
 
@@ -78,10 +80,6 @@ async function addSignedThumbnails(documents) {
       return doc;
     }),
   );
-}
-
-function escapeRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Saved-document cursors carry the sort key, so paging stays correct even when
@@ -160,7 +158,10 @@ router.get(
       // Check permissions:
       // 1. If document is viewable (public), allow access
       // 2. If document is private, user must be the owner
-      const isOwner = userId && document.userId._id.toString() === userId;
+      // Optional chaining: a document whose owner row was deleted has a null
+      // populated userId, which threw a TypeError here. The sibling route below
+      // already guards this way.
+      const isOwner = userId && document.userId?._id?.toString() === userId;
 
       if (!document.isViewable() && !isOwner) {
         return res.status(403).json({
@@ -187,7 +188,7 @@ router.get(
 router.get(
   "/:id/view",
   optionalAuthMiddleware,
-  [query("page").optional().isInt({ min: 1 })],
+  [query("page").optional().isInt({ min: 1, max: 1000 })],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -244,9 +245,9 @@ router.get(
         }
       } catch (error) {
         logger.error("Error generating view URL:", error);
-        viewUrl = document.s3Path
-          ? `https://your-bucket.s3.amazonaws.com/${document.s3Path}`
-          : null;
+        // Return null rather than a hardcoded placeholder URL: that URL could
+        // never work, and it disclosed the internal S3 key layout.
+        viewUrl = null;
       }
 
       const viewerData = await getViewerData(document, page);
@@ -277,13 +278,13 @@ router.get(
   "/user/my-documents",
   authMiddleware,
   [
-    query("cursor").optional().isString(),
+    query("cursor").optional().isMongoId(),
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
     query("status")
       .optional()
       .isIn(["uploaded", "processing", "processed", "failed", "all"])
       .default("all"),
-    query("search").optional().isString().trim(),
+    query("search").optional().isString().trim().isLength({ max: 100 }),
   ],
   rateLimitMiddleware("search"),
   async (req, res, next) => {
@@ -298,9 +299,10 @@ router.get(
       const { cursor, limit, status, search } = req.query;
       const userId = req.user.userId;
 
-      const cacheKey = `mydocs:${userId}:${status}:${search || "all"}:${
-        cursor || "initial"
-      }:${limit}`;
+      // search and cursor are hashed rather than interpolated raw - see cacheToken.
+      const cacheKey = `mydocs:${userId}:${status}:${cacheToken(
+        search
+      )}:${cacheToken(cursor) || "initial"}:${limit}`;
 
       if (getRedis()) {
         const cached = await getRedis().get(cacheKey);
@@ -317,9 +319,12 @@ router.get(
       }
 
       if (search) {
+        // escapeRegex is required here: an unescaped user pattern such as
+        // ((a+)+)+$ pins a mongod thread (ReDoS).
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { originalFilename: { $regex: search, $options: "i" } },
-          { generatedTitle: { $regex: search, $options: "i" } },
+          { originalFilename: { $regex: safeSearch, $options: "i" } },
+          { generatedTitle: { $regex: safeSearch, $options: "i" } },
         ];
       }
 
@@ -358,6 +363,7 @@ router.get(
 router.post(
   "/:id/track-download",
   optionalAuthMiddleware,
+  rateLimitMiddleware("download"),
   [param("id").isMongoId()],
   async (req, res, next) => {
     try {
@@ -371,6 +377,18 @@ router.post(
 
       const { id } = req.params;
       const userId = req.user?.userId;
+
+      // downloadsCount feeds the earnings and payout aggregations, so only count
+      // documents that are actually downloadable. Without this check the counter
+      // could be driven up on any id, including private and taken-down ones.
+      const document = await Document.findById(id).select("status visibility");
+
+      if (!document || !document.isViewable()) {
+        return res.status(404).json({
+          success: false,
+          message: "Document not found",
+        });
+      }
 
       // Track the download
       const tracked = await trackDownload(id, userId, req.ip);
@@ -389,14 +407,28 @@ router.post(
 router.patch(
   "/:id",
   authMiddleware,
-  [param("id").isMongoId()],
+  rateLimitMiddleware("write"),
+  // The allowedUpdates list below gates field *names*, so there is no mass
+  // assignment - but the values were entirely unchecked, accepting unbounded
+  // strings and arrays. These mirror the admin equivalent in admin/routes.js.
+  [
+    param("id").isMongoId(),
+    body("generatedTitle").optional().trim().notEmpty().isLength({ max: 255 }),
+    body("generatedDescription").optional().trim().isLength({ max: 500 }),
+    body("tags").optional().isArray({ max: 20 }),
+    body("tags.*").optional().trim().isString().isLength({ max: 50 }),
+    body("category").optional().isIn(DOCUMENT_CATEGORIES),
+    body("visibility").optional().isIn(["public", "private", "unlisted"]),
+    body("monetizationEnabled").optional().isBoolean(),
+  ],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
           success: false,
-          message: "Invalid document ID",
+          message: "Validation failed",
+          errors: errors.array(),
         });
       }
 
@@ -1473,10 +1505,10 @@ router.get(
   "/user/saved-documents",
   authMiddleware,
   [
-    query("cursor").optional().isString(),
+    query("cursor").optional().isString().isLength({ max: 200 }),
     query("limit").optional().isInt({ min: 1, max: 50 }).default(20),
-    query("search").optional().isString().trim(),
-    query("collectionId").optional().isString(),
+    query("search").optional().isString().trim().isLength({ max: 100 }),
+    query("collectionId").optional().isString().isLength({ max: 100 }),
   ],
   rateLimitMiddleware("search"),
   async (req, res, next) => {
@@ -1491,9 +1523,9 @@ router.get(
       const { cursor, limit, search, collectionId } = req.query;
       const userId = req.user.userId;
 
-      const cacheKey = `saveddocs:${userId}:${search || "all"}:${
+      const cacheKey = `saveddocs:${userId}:${cacheToken(search)}:${
         collectionId || "all"
-      }:${cursor || "initial"}:${limit}`;
+      }:${cacheToken(cursor)}:${limit}`;
 
       if (getRedis()) {
         const cached = await getRedis().get(cacheKey);

@@ -1,33 +1,9 @@
 import axios from "axios";
+import { isAllowedS3Url } from "../../lib/s3Allowlist";
 
 // Streaming a PDF through this route is only safe because the destination is
-// pinned to our own S3 bucket. The previous check was
-// `url.includes("amazonaws.com")`, which any attacker-controlled URL satisfies
-// (https://evil.example/?x=amazonaws.com), turning this into an open proxy
-// running inside our network.
-const ALLOWED_HOST_SUFFIXES = [".amazonaws.com"];
-
-function isAllowedUrl(raw) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return false;
-  }
-
-  if (parsed.protocol !== "https:") return false;
-
-  const host = parsed.hostname.toLowerCase();
-  const bucket = process.env.S3_BUCKET_NAME || process.env.NEXT_PUBLIC_S3_BUCKET;
-
-  // When the bucket name is configured, require it - a signed URL for someone
-  // else's bucket has no business being proxied by us either.
-  if (bucket && !host.startsWith(`${bucket.toLowerCase()}.`)) {
-    return false;
-  }
-
-  return ALLOWED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
-}
+// pinned to our own S3 bucket - see lib/s3Allowlist.js, which proxy-image.js
+// shares so both routes cannot drift apart.
 
 export default async function handler(req, res) {
   const { url } = req.query;
@@ -36,7 +12,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing URL" });
   }
 
-  if (!isAllowedUrl(url)) {
+  if (!isAllowedS3Url(url)) {
     return res.status(400).json({ error: "Invalid URL" });
   }
 

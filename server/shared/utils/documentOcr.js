@@ -80,7 +80,15 @@ async function downloadToTemp(s3Path) {
     `askocr-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`,
   );
 
-  await fs.promises.writeFile(tmpPath, buffer);
+  try {
+    await fs.promises.writeFile(tmpPath, buffer);
+  } catch (error) {
+    // A partial write here would never be returned, so the caller's finally
+    // block would have no path to unlink. OCR retries up to 40 times.
+    await fs.promises.unlink(tmpPath).catch(() => {});
+    throw error;
+  }
+
   return tmpPath;
 }
 

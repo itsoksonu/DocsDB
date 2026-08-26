@@ -1,4 +1,5 @@
 import express, { json, urlencoded } from "express";
+import mongoose from "mongoose";
 import cors from "cors";
 import helmet from "helmet";
 import compression from "compression";
@@ -9,6 +10,7 @@ import { errorHandler } from "./shared/middleware/errorHandler.js";
 import { requestLogger } from "./shared/middleware/logger.js";
 import { securityHeaders } from "./shared/middleware/security.js";
 import { createRateLimiter } from "./shared/utils/rateLimiter.js";
+import { validateConfig } from "./shared/utils/config.js";
 import logger from "./shared/utils/logger.js";
 
 import authRoutes from "./services/auth/routes.js";
@@ -27,6 +29,8 @@ import databaseManager from "./shared/database/connection.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const SHUTDOWN_TIMEOUT_MS =
+  parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 25_000;
 
 app.use(
   helmet({
@@ -89,7 +93,7 @@ const limiter = createRateLimiter({
   windowMs: parseInt(process.env.GLOBAL_RATE_LIMIT_WINDOW_MS) || 60 * 1000,
   max: parseInt(process.env.GLOBAL_RATE_LIMIT_MAX) || 1000,
   message: "Too many requests from this IP, please slow down.",
-  skipPaths: ["/health"],
+  skipPaths: ["/health", "/ready"],
 });
 app.use(limiter);
 
@@ -102,12 +106,26 @@ app.use(requestLogger);
 
 app.use(securityHeaders);
 
+// Liveness: is the process up? Deliberately dependency-free so a Redis blip
+// does not get the container restarted. NODE_ENV is not reported - an unauthed
+// endpoint should not describe the deployment.
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "OK",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    environment: process.env.NODE_ENV,
+  });
+});
+
+// Readiness: should this instance receive traffic? Reports 503 while Mongo is
+// down so a load balancer can route around it.
+app.get("/ready", (req, res) => {
+  const mongoReady = mongoose.connection.readyState === 1;
+  const redisReady = Boolean(databaseManager.getRedisClient()?.isReady);
+
+  res.status(mongoReady ? 200 : 503).json({
+    status: mongoReady ? "READY" : "NOT_READY",
+    checks: { mongo: mongoReady, redis: redisReady },
   });
 });
 
@@ -126,23 +144,29 @@ app.use(`/api/${process.env.API_VERSION || "v1"}/report`, reportRoutes);
 app.use(`/api/${process.env.API_VERSION || "v1"}/admin`, adminRoutes);
 app.use(`/api/${process.env.API_VERSION || "v1"}/admin`, fetcherRoutes);
 
-app.use(errorHandler);
-
+// 404 first, then the error handler. Express skips 4-arg error middleware in the
+// normal flow so the previous order happened to work, but an error thrown from
+// the catch-all would have escaped it.
 app.use("*", (req, res) => {
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`,
+    message: "Route not found",
     data: null,
   });
 });
 
+app.use(errorHandler);
+
 async function startServer() {
   try {
+    // Before anything opens a connection or binds a port.
+    validateConfig();
+
     await databaseManager.connectMongo();
     await databaseManager.connectRedis();
 
     // Start the scheduled document fetcher (no-op unless enabled via env).
-    initFetcherCron();
+    const fetcherTask = initFetcherCron();
 
     const server = app.listen(PORT, () => {
       console.log(`🚀 DocsDB Server running on port ${PORT}`);
@@ -156,7 +180,9 @@ async function startServer() {
     });
 
     // Initialize Socket.io
-    const { initSocket } = await import("./shared/utils/socket.js");
+    const { initSocket, closeSocket } = await import(
+      "./shared/utils/socket.js"
+    );
     initSocket(server, {
       origin: process.env.FRONTEND_URL || "http://localhost:3000",
       credentials: true,
@@ -166,15 +192,54 @@ async function startServer() {
     // View and download counts are buffered in Redis; drain the buffer before
     // the process goes away so a deploy does not throw away the last window.
     const { stopCounters } = await import("./shared/utils/counters.js");
+    const { processDocumentQueue } = await import(
+      "./shared/queues/processQueue.js"
+    );
+
+    let shuttingDown = false;
     const shutdown = async (signal) => {
-      console.log(`Received ${signal}, flushing counters and shutting down`);
-      server.close();
-      await stopCounters();
-      await databaseManager.disconnect();
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logger.info(`Received ${signal}, draining and shutting down`);
+
+      // Hard deadline: if anything below hangs, still exit rather than letting
+      // the orchestrator SIGKILL us mid-flush.
+      const forceExit = setTimeout(() => {
+        logger.error("Shutdown timed out, forcing exit");
+        process.exit(1);
+      }, SHUTDOWN_TIMEOUT_MS);
+      forceExit.unref();
+
+      try {
+        fetcherTask?.stop();
+        // Stop accepting new connections and wait for in-flight requests. The
+        // previous code called server.close() without awaiting it and then
+        // exited immediately, cutting live responses off.
+        await closeSocket();
+        await new Promise((resolve) => server.close(resolve));
+        await processDocumentQueue.close();
+        await stopCounters();
+        await databaseManager.disconnect();
+      } catch (error) {
+        logger.error("Error during shutdown:", error);
+      }
+
+      clearTimeout(forceExit);
       process.exit(0);
     };
+
     process.once("SIGTERM", () => shutdown("SIGTERM"));
     process.once("SIGINT", () => shutdown("SIGINT"));
+
+    // Without these, an escaped rejection or throw kills the process with the
+    // Redis counter buffer still undrained.
+    process.on("unhandledRejection", (reason) => {
+      logger.error("Unhandled promise rejection:", reason);
+    });
+    process.on("uncaughtException", (error) => {
+      logger.error("Uncaught exception:", error);
+      shutdown("uncaughtException");
+    });
   } catch (error) {
     console.error("Failed to start server:", error);
     process.exit(1);

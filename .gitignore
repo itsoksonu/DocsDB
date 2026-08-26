@@ -3,3 +3,11 @@ node_modules
 settings.local.json
 
 logs
+
+# Never commit environment files - server/.env holds live AWS, Stripe, Mongo,
+# Redis and AI provider credentials.
+.env
+.env.*
+!.env.example
+
+.next

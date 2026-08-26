@@ -30,7 +30,7 @@ export default function About() {
                 <p className="text-lg">
                   At DocsDB, our mission is to democratize access to knowledge.
                   We believe that information should be easily accessible,
-                  organized, and shareable. Whether you're a student,
+                  organized, and shareable. Whether you&apos;re a student,
                   researcher, or professional, DocsDB provides the tools you
                   need to find and share valuable documents.
                 </p>
@@ -79,7 +79,7 @@ export default function About() {
                 <p>
                   We are more than just a platform; we are a community of
                   learners and educators. Join us in our journey to make the
-                  world's knowledge more accessible.
+                  world&apos;s knowledge more accessible.
                 </p>
               </section>
             </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import AdminLayout from "../../components/admin/AdminLayout";
 import { apiService } from "../../services/api";
 import {
@@ -23,47 +23,63 @@ export default function DocumentManagement() {
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [editingDocument, setEditingDocument] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [reprocessing, setReprocessing] = useState(null);
+  const fetchSeqRef = useRef(0);
 
-  useEffect(() => {
-    fetchDocuments();
-  }, [page, statusFilter]);
-
+  // Debounce the search term, then fetch from a single effect. The previous
+  // shape had two effects that both called fetchDocuments, so a mount or a
+  // filter change fired two identical requests whose responses could land out
+  // of order.
   useEffect(() => {
     const timer = setTimeout(() => {
+      setDebouncedSearch(search);
       setPage(1);
-      fetchDocuments();
     }, 500);
     return () => clearTimeout(timer);
   }, [search]);
 
-  const fetchDocuments = async () => {
+  // useCallback so the effect can depend on the function rather than restating
+  // its inputs. It reads page/statusFilter/debouncedSearch and sets none of
+  // them, so its identity changes exactly when a refetch is wanted.
+  const fetchDocuments = useCallback(async () => {
     setLoading(true);
+
+    const seq = ++fetchSeqRef.current;
+    const isCurrent = () => seq === fetchSeqRef.current;
+
     try {
       const params = {
         page,
         limit: 10,
-        search,
+        search: debouncedSearch,
         status: statusFilter,
       };
 
       Object.keys(params).forEach((key) => !params[key] && delete params[key]);
 
       const response = await apiService.getAdminDocuments(params);
+      if (!isCurrent()) return;
+
       if (response && response.data) {
         setDocuments(response.data.documents);
         setPagination(response.data.pagination);
       }
     } catch (error) {
+      if (!isCurrent()) return;
       console.error("Error fetching documents:", error);
       toast.error("Failed to load documents");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  };
+  }, [page, statusFilter, debouncedSearch]);
+
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
 
   const handleTakedown = async (documentId) => {
     const reason = prompt("Enter reason for takedown:");

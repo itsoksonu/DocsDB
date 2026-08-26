@@ -84,7 +84,6 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState(q || "");
   const [selectedCategory, setSelectedCategory] = useState(category || "");
   const [searchType, setSearchType] = useState(type || "keyword");
@@ -95,6 +94,11 @@ export default function SearchPage() {
   const observer = useRef();
   const sortRef = useRef(null);
   const categoryRef = useRef(null);
+  const searchSeqRef = useRef(0);
+  // Which page to request next. A ref rather than state because nothing renders
+  // it - it was only ever read back by the next request, and as state it forced
+  // three extra re-renders per search.
+  const pageRef = useRef(1);
 
   const activeSortLabel =
     SORT_OPTIONS.find((s) => s.value === sort)?.label || "Most Relevant";
@@ -108,10 +112,16 @@ export default function SearchPage() {
         return;
       }
 
+      // Typing and filter changes fire overlapping requests. Without this guard
+      // a slow earlier response lands after a newer one and overwrites it, so
+      // the results shown do not match the query in the box.
+      const seq = ++searchSeqRef.current;
+      const isCurrent = () => seq === searchSeqRef.current;
+
       try {
         if (reset) {
           setLoading(true);
-          setPage(1);
+          pageRef.current = 1;
         } else {
           setLoadingMore(true);
         }
@@ -121,11 +131,13 @@ export default function SearchPage() {
           type: searchType,
           sort,
           category: selectedCategory || undefined,
-          page: reset ? 1 : page,
+          page: reset ? 1 : pageRef.current,
           limit: 20,
         };
 
         const response = await apiService.searchDocuments(params);
+        if (!isCurrent()) return;
+
         const { documents: newDocs, pagination } = response.data;
 
         if (reset) {
@@ -136,16 +148,23 @@ export default function SearchPage() {
 
         setTotalResults(pagination.total);
         setHasMore(pagination.hasMore);
-        setPage((prev) => (reset ? 2 : prev + 1));
+        pageRef.current = reset ? 2 : pageRef.current + 1;
       } catch (error) {
+        if (!isCurrent()) return;
         toast.error("Failed to search documents");
         console.error("Search error:", error);
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (isCurrent()) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
-    [searchQuery, searchType, selectedCategory, sort, page],
+    // page is deliberately absent: it lives in pageRef, not state. Keeping it
+    // as a dependency here while the body also advanced it meant this callback
+    // changed identity on every search, so the effect below could not depend on
+    // it without looping (effect -> setPage -> new identity -> effect -> ...).
+    [searchQuery, searchType, selectedCategory, sort],
   );
 
   const lastDocumentRef = useCallback(
@@ -164,6 +183,10 @@ export default function SearchPage() {
     [loadingMore, hasMore, performSearch],
   );
 
+  // The observer was only ever disconnected when the ref callback ran again, so
+  // the last one outlived the page and could call performSearch after unmount.
+  useEffect(() => () => observer.current?.disconnect(), []);
+
   useEffect(() => {
     if (q) setSearchQuery(q);
   }, [q]);
@@ -180,9 +203,12 @@ export default function SearchPage() {
     if (sortQuery) setSort(sortQuery);
   }, [sortQuery]);
 
+  // performSearch's own deps are exactly the four values this effect used to
+  // list, so depending on the callback is equivalent - and stays correct if
+  // those inputs ever change.
   useEffect(() => {
     performSearch(true);
-  }, [searchQuery, selectedCategory, searchType, sort]);
+  }, [performSearch]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -207,9 +233,12 @@ export default function SearchPage() {
   const handleSearch = (query) => {
     const trimmed = query.trim();
     if (trimmed && trimmed !== router.query.q) {
+      // No encodeURIComponent: next/router already encodes values in a query
+      // object, so encoding here produced %2520 in the URL and a literal "%20"
+      // in the search term sent to the API.
       router.push({
         pathname: "/search",
-        query: buildQuery({ q: encodeURIComponent(trimmed) }),
+        query: buildQuery({ q: trimmed }),
       });
     }
   };
@@ -254,9 +283,12 @@ export default function SearchPage() {
   return (
     <>
       <Head>
-        <title>
-          {searchQuery ? `Search: ${searchQuery}` : "Search"} - DocsDB
-        </title>
+        {/* One expression, not {expr} + " - DocsDB": a title with two children
+            is an array of text nodes, which React warns about and which makes
+            hydration fall back to client rendering. */}
+        <title>{`${
+          searchQuery ? `Search: ${searchQuery}` : "Search"
+        } - DocsDB`}</title>
         <meta
           name="description"
           content={`Search results for "${searchQuery}" on DocsDB`}

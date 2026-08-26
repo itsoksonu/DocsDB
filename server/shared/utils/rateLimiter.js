@@ -7,9 +7,12 @@
 //   2. User-friendly keying: authenticated requests are limited per user id,
 //      NOT per IP, so many users behind one NAT/corporate proxy/mobile carrier
 //      don't throttle each other. Unauthenticated requests fall back to IP.
-//   3. Fail-open: if Redis is briefly unavailable, requests are allowed rather
-//      than 500'ing the entire API. We log the error instead.
-import rateLimit from "express-rate-limit";
+//   3. Degrade, don't fail open: if Redis is briefly unavailable we fall back to
+//      a process-local MemoryStore rather than 500'ing the API *or* allowing
+//      everything. Limits become per-instance instead of global, which is a far
+//      better outcome than an attacker removing all rate limiting by stressing
+//      Redis.
+import rateLimit, { MemoryStore } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import databaseManager from "../database/connection.js";
 import logger from "./logger.js";
@@ -31,12 +34,14 @@ function makeHandler(message) {
 //   - lazily constructs the underlying RedisStore on first use (rate-limit-redis
 //     issues a Redis command in its constructor, but limiters are built at
 //     import time — before startServer() connects Redis), and
-//   - fails OPEN on any Redis error so a blip can't 500 the whole API.
+//   - degrades to a process-local MemoryStore on any Redis error, so a blip can
+//     neither 500 the whole API nor silently disable rate limiting.
 class ResilientRedisStore {
   constructor(prefix) {
     this.prefix = `rl:${prefix}:`;
     this.options = null;
     this.inner = null;
+    this.fallback = null;
     this.windowMs = 60_000;
   }
 
@@ -45,11 +50,22 @@ class ResilientRedisStore {
     this.windowMs = options.windowMs;
   }
 
+  // Built lazily and reused, so counts survive across requests while Redis is
+  // down. Bounded by MemoryStore's own window-based eviction.
+  ensureFallback() {
+    if (!this.fallback) {
+      this.fallback = new MemoryStore();
+      if (this.options) this.fallback.init(this.options);
+    }
+    return this.fallback;
+  }
+
   // Build the real RedisStore once Redis is connected; cache it.
   ensureInner() {
     if (this.inner) return this.inner;
     const client = databaseManager.getRedisClient();
-    if (!client) return null; // Redis not ready yet → caller fails open.
+    // Redis not ready yet → caller degrades to the in-process store.
+    if (!client || !client.isReady) return null;
     try {
       const store = new RedisStore({
         prefix: this.prefix,
@@ -64,24 +80,22 @@ class ResilientRedisStore {
     }
   }
 
-  allow() {
-    return { totalHits: 0, resetTime: new Date(Date.now() + this.windowMs) };
-  }
-
   async increment(key) {
     const inner = this.ensureInner();
-    if (!inner) return this.allow();
+    if (!inner) return this.ensureFallback().increment(key);
     try {
       return await inner.increment(key);
     } catch (err) {
-      logger.error(`[rate-limit] store error (failing open): ${err.message}`);
-      return this.allow();
+      logger.error(
+        `[rate-limit] store error (degrading to in-process store): ${err.message}`
+      );
+      return this.ensureFallback().increment(key);
     }
   }
 
   async decrement(key) {
     const inner = this.ensureInner();
-    if (!inner) return;
+    if (!inner) return this.ensureFallback().decrement(key);
     try {
       await inner.decrement(key);
     } catch (err) {
@@ -91,7 +105,7 @@ class ResilientRedisStore {
 
   async resetKey(key) {
     const inner = this.ensureInner();
-    if (!inner) return;
+    if (!inner) return this.ensureFallback().resetKey(key);
     try {
       await inner.resetKey(key);
     } catch (err) {

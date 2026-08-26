@@ -112,7 +112,17 @@ function buildCsvPreview(buffer) {
   return { kind: "sheet", sheets: [{ name: null, ...clampRows(raw) }] };
 }
 
+// Uploads are allowed up to 100 MB, and this runs on a request path with no
+// concurrency limit: N simultaneous previews of a large XLSX are N full copies
+// in memory plus N parsed workbooks. The MAX_* caps below bound the *output*,
+// not the input buffer, so the input needs its own ceiling.
+const MAX_PREVIEW_BYTES = 25 * 1024 * 1024;
+
 async function build(document) {
+  if (document.sizeBytes && document.sizeBytes > MAX_PREVIEW_BYTES) {
+    return { kind: "unsupported" };
+  }
+
   const buffer = await S3Manager.getObjectBuffer(document.s3Path);
 
   switch (document.fileType) {

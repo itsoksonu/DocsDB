@@ -157,7 +157,18 @@ function parse(buffer, fileType) {
   }
 }
 
+// MAX_EXTRACT_CHARS bounds the output, not the input buffer, and this runs on a
+// request path. Uploads go up to 100 MB, so cap what is pulled into memory.
+const MAX_EXTRACT_BYTES = 25 * 1024 * 1024;
+
 async function extract(document) {
+  if (document.sizeBytes && document.sizeBytes > MAX_EXTRACT_BYTES) {
+    logger.warn(
+      `Ask AI: ${document._id} is ${document.sizeBytes} bytes - too large to extract`,
+    );
+    return [];
+  }
+
   // Outside the try: a storage failure is transient and must stay an error the
   // caller reports, not be mistaken for a document with no text.
   const buffer = await S3Manager.getObjectBuffer(document.s3Path);

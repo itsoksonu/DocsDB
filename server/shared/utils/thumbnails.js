@@ -2,13 +2,7 @@ import path from "path";
 import fs from "fs/promises";
 import { tmpdir } from "os";
 import { Jimp, loadFont } from "jimp";
-import {
-  SANS_16_BLACK,
-  SANS_16_WHITE,
-  SANS_32_WHITE,
-  SANS_64_WHITE,
-} from "jimp/fonts";
-import logger from "./logger.js";
+import { SANS_16_BLACK, SANS_32_WHITE, SANS_64_WHITE } from "jimp/fonts";
 
 /**
  * Thumbnails that show what is actually in the file.
@@ -30,8 +24,6 @@ const PAGE_WIDTH = 620;
 const PAGE_HEIGHT = 800;
 
 const PAGE_BG = 0xffffffff;
-const INK = 0x1f2937ff;
-const MUTED = 0x9ca3afff;
 const RULE = 0xe5e7ebff;
 
 const TYPE_COLORS = {

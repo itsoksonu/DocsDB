@@ -209,7 +209,7 @@ export default function HelpCenter() {
             ) : (
               <div className="text-center py-12">
                 <p className="text-dark-300 text-lg">
-                  No results found for "{searchQuery}".
+                  No results found for &ldquo;{searchQuery}&rdquo;.
                 </p>
                 <p className="text-dark-400 mt-2">
                   Try searching for something else or browse categories.
@@ -225,7 +225,7 @@ export default function HelpCenter() {
                 Still need help?
               </h3>
               <p className="text-dark-300 mb-8">
-                Can't find what you're looking for? Our support team is here to
+                Can&apos;t find what you&apos;re looking for? Our support team is here to
                 assist you.
               </p>
               <Link

@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "nodemon --env-file=.env server.js",
     "start": "node --env-file=.env server.js",
-    "test": "NODE_ENV=test jest",
+    "test": "NODE_ENV=test node --test \"shared/**/*.test.mjs\"",
     "test:unit": "node --test shared/utils/__tests__/storage.test.mjs",
-    "test:watch": "NODE_ENV=test jest --watch",
+    "test:watch": "NODE_ENV=test node --test --watch \"shared/**/*.test.mjs\"",
     "lint": "eslint .",
     "migrate": "node --env-file=.env shared/database/migrate.js"
   },
@@ -36,7 +36,6 @@
     "mammoth": "^1.11.0",
     "mongoose": "^8.0.3",
     "node-cron": "^4.2.1",
-    "npm": "^11.6.2",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^4.8.69",

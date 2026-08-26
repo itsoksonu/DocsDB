@@ -50,7 +50,7 @@ export default function AdminDashboard() {
         <div>
           <h1 className="text-2xl font-bold text-white">Dashboard Overview</h1>
           <p className="text-dark-400 mt-1">
-            Welcome back, here's what's happening today.
+            Welcome back, here&apos;s what&apos;s happening today.
           </p>
         </div>
 

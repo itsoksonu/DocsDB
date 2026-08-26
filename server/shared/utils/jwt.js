@@ -10,6 +10,15 @@ class JWTManager {
     if (!this.accessSecret || !this.refreshSecret) {
       throw new Error('JWT secrets must be defined in environment variables');
     }
+
+    if (this.accessSecret === this.refreshSecret) {
+      throw new Error('JWT_SECRET and JWT_REFRESH_SECRET must differ');
+    }
+
+    // 32 bytes is the output size of HS256; a shorter secret is brute-forceable.
+    if (this.accessSecret.length < 32 || this.refreshSecret.length < 32) {
+      throw new Error('JWT secrets must be at least 32 characters long');
+    }
   }
 
   generateAccessToken(payload) {

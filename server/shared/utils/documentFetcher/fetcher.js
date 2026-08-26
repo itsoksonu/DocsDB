@@ -105,8 +105,26 @@ async function downloadToBuffer(url, adapter) {
         redirect: "follow",
         signal: controller.signal,
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        // Cancel rather than abandon: an unread body holds the connection open
+        // until GC.
+        await res.body?.cancel?.().catch(() => {});
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      // The MAX_BYTES check downstream only runs *after* the whole response has
+      // been materialised, so a mislabelled or hostile URL could buffer
+      // gigabytes first. Reject on the advertised length before reading.
+      const advertised = Number(res.headers.get("content-length"));
+      if (Number.isFinite(advertised) && advertised > MAX_BYTES) {
+        await res.body?.cancel?.().catch(() => {});
+        throw new Error(`Response too large: ${advertised} bytes`);
+      }
+
       const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > MAX_BYTES) {
+        throw new Error(`Response too large: ${buf.length} bytes`);
+      }
       return buf;
     } catch (err) {
       lastErr = err;
@@ -189,7 +207,6 @@ export async function fetchDocuments({ category, count, userId, onProgress = () 
 
     // --- 2. Download, validate, de-dup, upload, enqueue --------------------
     const batchHashes = new Set();
-    let processed = 0;
 
     for (const candidate of candidates) {
       if (documents.length >= count) break;
@@ -327,7 +344,6 @@ export async function fetchDocuments({ category, count, userId, onProgress = () 
         documentId: document._id.toString(),
       });
 
-      processed++;
       onProgress({
         stage: "downloading",
         source,

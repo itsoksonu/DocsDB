@@ -1,27 +1,39 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Search, X } from '../../icons';
 import debounce from "lodash.debounce";
 
-export const SearchBar = ({ 
-  onSearch, 
+export const SearchBar = ({
+  onSearch,
   placeholder = "Search documents...",
   className = "",
-  autoFocus = false 
+  autoFocus = false,
+  // search.jsx passes this, but the prop was never accepted - so the input was
+  // always blank on load and on back-navigation while results showed a query.
+  defaultValue = ''
 }) => {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(defaultValue);
   const [isFocused, setIsFocused] = useState(false);
 
+  // Held in a ref rather than added to the effect deps below. The debounced call
+  // used to close over whatever onSearch was current 600ms earlier, which meant
+  // searching with stale filters; but every call site passes an unmemoized
+  // handler, so depending on it directly would re-fire the search on each render.
+  const onSearchRef = useRef(onSearch);
   useEffect(() => {
-  const debouncedSearch = debounce((val) => {
-    if (val.length >= 2 || val.length === 0) {
-      onSearch(val);
-    }
-  }, 600);
+    onSearchRef.current = onSearch;
+  }, [onSearch]);
 
-  debouncedSearch(query);
-  return () => debouncedSearch.cancel();
-}, [query]);
+  useEffect(() => {
+    const debouncedSearch = debounce((val) => {
+      if (val.length >= 2 || val.length === 0) {
+        onSearchRef.current(val);
+      }
+    }, 600);
+
+    debouncedSearch(query);
+    return () => debouncedSearch.cancel();
+  }, [query]);
 
   const clearSearch = () => {
     setQuery('');

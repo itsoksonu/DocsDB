@@ -15,7 +15,7 @@ export const authMiddleware = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = JWTManager.verifyAccessToken(token);
 
-    const user = await User.findById(decoded.userId);
+    const user = await User.findById(decoded.userId).select("email role status");
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -23,10 +23,19 @@ export const authMiddleware = async (req, res, next) => {
       });
     }
 
+    if (user.status !== "active") {
+      return res.status(403).json({
+        success: false,
+        message: "Account is not active",
+      });
+    }
+
+    // Role comes from the freshly loaded user, not from the token claims - a
+    // demoted admin must lose access immediately rather than at token expiry.
     req.user = {
-      userId: decoded.userId,
-      email: decoded.email,
-      role: decoded.role,
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
     };
 
     next();
@@ -51,21 +60,20 @@ export const optionalAuthMiddleware = async (req, res, next) => {
 
     try {
       const decoded = JWTManager.verifyAccessToken(token);
-      const user = await User.findById(decoded.userId);
+      const user = await User.findById(decoded.userId).select(
+        "email role status"
+      );
 
-      if (user) {
+      if (user && user.status === "active") {
         req.user = {
-          userId: decoded.userId,
-          email: decoded.email,
-          role: decoded.role,
+          userId: user._id.toString(),
+          email: user.email,
+          role: user.role,
         };
       }
     } catch (err) {
-      // Token present but invalid - return 401 to help debug
-      return res.status(401).json({
-        success: false,
-        message: "Invalid or expired access token",
-      });
+      // Optional auth: an expired or invalid token must not break a public
+      // route. Continue unauthenticated and let the route decide.
     }
 
     next();

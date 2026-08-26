@@ -1,5 +1,24 @@
+import crypto from "crypto";
 import { getRedis } from "./redis.js";
 import logger from "./logger.js";
+
+/**
+ * Turns a user-supplied string into a fixed-length, structure-free cache-key
+ * segment.
+ *
+ * Interpolating a raw search term into a Redis key hands the caller control of
+ * both key cardinality (every distinct string is a new key holding a whole
+ * response payload) and key structure, since ":" is not stripped. Hashing fixes
+ * both and keeps the key readable.
+ */
+export function cacheToken(value) {
+  if (value === undefined || value === null || value === "") return "none";
+  return crypto
+    .createHash("sha1")
+    .update(String(value))
+    .digest("hex")
+    .slice(0, 16);
+}
 
 /**
  * countDocuments on a large collection is O(matching docs). The admin

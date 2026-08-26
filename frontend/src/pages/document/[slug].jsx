@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import Link from "next/link";
@@ -47,6 +47,12 @@ const DocumentViewerPage = ({
   const [isSaving, setIsSaving] = useState(false);
   const [relatedDocs, setRelatedDocs] = useState(initialRelatedDocs || []);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
+  // Moved up from below the effects: checkSavedStatus (declared just after the
+  // effects) writes savedCollectionId, and state used by a hook should not be
+  // declared after it.
+  const [showCollectionModal, setShowCollectionModal] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [savedCollectionId, setSavedCollectionId] = useState(null);
 
   // Every API call keys off the document's own id once it is loaded, so a
   // request never depends on whether the visitor arrived by slug or by id.
@@ -61,39 +67,11 @@ const DocumentViewerPage = ({
     if (initialDocument) setLoading(false);
   }, [initialDocument, initialViewUrl, initialRelatedDocs, serverError]);
 
-  useEffect(() => {
-    if (document && user) {
-      checkSavedStatus();
-    }
-  }, [document, user]);
-
-  // Loading related docs on client if not provided by SSR (fallback)
-  useEffect(() => {
-    if (documentId && !initialRelatedDocs) {
-      loadRelatedDocuments();
-    }
-  }, [documentId, initialRelatedDocs]);
-
-  const loadRelatedDocuments = async () => {
-    try {
-      if (!documentId) return;
-      const response = await apiService.getRelatedDocuments(documentId, 6);
-      const docs = response.data?.data || response.data || [];
-      if (Array.isArray(docs)) {
-        setRelatedDocs(docs);
-      } else {
-        setRelatedDocs([]);
-      }
-    } catch (err) {
-      console.error("Error loading related documents:", err);
-    }
-  };
-
-  const [showCollectionModal, setShowCollectionModal] = useState(false);
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-  const [savedCollectionId, setSavedCollectionId] = useState(null);
-
-  const checkSavedStatus = async () => {
+  // Declared above the effect that lists it as a dependency, not below: a
+  // dependency array is evaluated during render, so a `const` arrow function
+  // defined further down the component would still be in its temporal dead zone
+  // and throw a ReferenceError.
+  const checkSavedStatus = useCallback(async () => {
     try {
       const response = await apiService.checkSavedStatus(documentId);
       setIsSaved(response.data.isSaved);
@@ -101,7 +79,41 @@ const DocumentViewerPage = ({
     } catch (error) {
       console.error("Error checking save status:", error);
     }
-  };
+  }, [documentId]);
+
+  // Keyed on ids, not on the `document` object: the effect above replaces that
+  // object on every prop-identity change, which re-fired /save/status each time.
+  // The guard reads user?.id rather than user for the same reason.
+  useEffect(() => {
+    if (documentId && user?.id) {
+      checkSavedStatus();
+    }
+  }, [documentId, user?.id, checkSavedStatus]);
+
+  // Loading related docs on client if not provided by SSR (fallback)
+  useEffect(() => {
+    if (!documentId || initialRelatedDocs) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await apiService.getRelatedDocuments(documentId, 6);
+        if (cancelled) return;
+        const docs = response.data?.data || response.data || [];
+        setRelatedDocs(Array.isArray(docs) ? docs : []);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Error loading related documents:", err);
+        }
+      }
+    })();
+
+    // Without this, navigating away mid-flight sets state on an unmounted page.
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId, initialRelatedDocs]);
 
   const handleSaveClick = () => {
     if (!user) {
@@ -146,7 +158,7 @@ const DocumentViewerPage = ({
 
   const handleDownload = async () => {
     if (viewUrl) {
-      window.open(viewUrl, "_blank");
+      window.open(viewUrl, "_blank", "noopener,noreferrer");
 
       try {
         await apiService.trackDownload(documentId);
@@ -230,7 +242,9 @@ const DocumentViewerPage = ({
   return (
     <>
       <Head>
-        <title>{document.generatedTitle} - DocsDB</title>
+        {/* Single expression: a title with two children (expression + literal)
+            is an array of text nodes, which breaks hydration. */}
+        <title>{`${document.generatedTitle} - DocsDB`}</title>
         <meta name="description" content={document.generatedDescription} />
         <link rel="canonical" href={canonicalUrl} />
 
@@ -254,10 +268,15 @@ const DocumentViewerPage = ({
         />
         <meta property="twitter:image" content={imageUrl} />
 
-        {/* Schema.org JSON-LD */}
+        {/* Schema.org JSON-LD. JSON.stringify does not escape "<", so a title
+            or description containing </script> would close this tag early and
+            execute whatever follows - and these fields are derived from
+            user-uploaded documents. */}
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
+          }}
         />
       </Head>
 
@@ -516,7 +535,11 @@ export async function getServerSideProps(context) {
     // 1. Fetch document view data (includes doc details and viewUrl)
     // Note: We're not passing auth token here, so only public documents will be fetched.
     // If the document is private, the backend should return 403 or 404, which we handle.
-    const viewResponse = await axios.get(`${apiUrl}/documents/${slug}/view`);
+    // Timeout is required: without it a hung API pins this SSR worker until the
+    // hosting platform kills the whole request.
+    const viewResponse = await axios.get(`${apiUrl}/documents/${slug}/view`, {
+      timeout: 8000,
+    });
 
     if (!viewResponse.data?.success) {
       return { notFound: true };

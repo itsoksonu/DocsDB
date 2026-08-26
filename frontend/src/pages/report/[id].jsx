@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { useAuth } from "../../contexts/AuthContext";
@@ -31,16 +31,10 @@ const ReportPage = () => {
 
   const [existingReport, setExistingReport] = useState(null);
 
-  useEffect(() => {
-    if (id) {
-      loadDocument();
-      if (user) {
-        checkReportStatus();
-      }
-    }
-  }, [id, user]);
-
-  const checkReportStatus = async () => {
+  // Both declared above the effect that lists them: a dependency array is
+  // evaluated during render, so a `const` defined below would still be in its
+  // temporal dead zone.
+  const checkReportStatus = useCallback(async () => {
     try {
       const response = await apiService.checkReportStatus(id);
       if (response.data.hasActiveReport) {
@@ -49,9 +43,9 @@ const ReportPage = () => {
     } catch (error) {
       console.error("Error checking report status:", error);
     }
-  };
+  }, [id]);
 
-  const loadDocument = async () => {
+  const loadDocument = useCallback(async () => {
     try {
       setLoading(true);
       const docResponse = await apiService.client.get(`/documents/${id}`);
@@ -62,7 +56,16 @@ const ReportPage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      loadDocument();
+      if (user) {
+        checkReportStatus();
+      }
+    }
+  }, [id, user, loadDocument, checkReportStatus]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

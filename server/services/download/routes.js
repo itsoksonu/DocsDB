@@ -81,10 +81,10 @@ router.post('/:id/request',
 // Complete download after ad/timer
 router.post('/:id/complete',
   authMiddleware,
+  rateLimitMiddleware('download'),
   [
     param('id').isMongoId(),
-    body('sessionId').notEmpty(),
-    body('adCompleted').optional().isBoolean()
+    body('sessionId').isString().trim().matches(/^dl_[a-f0-9]{32}$/)
   ],
   async (req, res, next) => {
     try {
@@ -98,10 +98,10 @@ router.post('/:id/complete',
       }
 
       const { id } = req.params;
-      const { sessionId, adCompleted = false } = req.body;
+      const { sessionId } = req.body;
       const userId = req.user.userId;
 
-      const session = await completeDownloadSession(sessionId, userId, adCompleted);
+      const session = await completeDownloadSession(sessionId, userId, id);
       if (!session.valid) {
         return res.status(400).json({
           success: false,
@@ -117,7 +117,7 @@ router.post('/:id/complete',
         });
       }
 
-      const downloadUrl = S3Manager.generateDownloadUrl(
+      const downloadUrl = await S3Manager.generateDownloadUrl(
         document.s3Path,
         document.originalFilename,
         3600
@@ -281,9 +281,25 @@ router.get('/admin/statistics',
 );
 
 // Helper functions
+
+// ============================================================================
+// STUB - NOT IMPLEMENTED. Everything from here to getTimeFilter() returns
+// hardcoded or Math.random() data, not real download figures.
+//
+// `skip` below is deliberately unused (hence the underscore): it documents the
+// pagination the real query needs. Nothing in the frontend consumes /history or
+// /admin/statistics today, which is the only reason this is not actively
+// misreporting to anyone - but /admin/statistics returns invented
+// `totalDownloads` and `revenueGenerated` values, so do NOT wire a dashboard to
+// these endpoints before the aggregations are written.
+//
+// Real data for this already exists: view/download counters land on the Document
+// via shared/utils/counters.js, per-day rows are in DocumentDailyStat, and
+// revenue is in the Earnings collection.
+// ============================================================================
 async function getDownloadHistory(userId, page, limit) {
-  const skip = (page - 1) * limit;
-  
+  const _skip = (page - 1) * limit;
+
   // In production, this would query a dedicated downloads collection
   // For now, we'll use Redis or mock data
   const cacheKey = `downloads:user:${userId}:${page}:${limit}`;
@@ -314,8 +330,9 @@ async function getDownloadHistory(userId, page, limit) {
 }
 
 async function getDownloadStatistics(timeframe, documentId = null) {
-  const timeFilter = getTimeFilter(timeframe);
-  
+  // Unused: documents the filter the real aggregation needs. See the STUB note above.
+  const _timeFilter = getTimeFilter(timeframe);
+
   // Mock statistics (in production, this would aggregate from analytics)
   const stats = {
     timeframe,
@@ -335,8 +352,9 @@ async function getDownloadStatistics(timeframe, documentId = null) {
 }
 
 async function getTopDownloadedDocuments(timeframe, limit = 10) {
-  const timeFilter = getTimeFilter(timeframe);
-  
+  // Unused: see the STUB note above.
+  const _timeFilter = getTimeFilter(timeframe);
+
   // Mock top documents (in production, this would be a real aggregation)
   return [
     {
@@ -354,7 +372,7 @@ async function getTopDownloadedDocuments(timeframe, limit = 10) {
   ].slice(0, limit);
 }
 
-async function getDocumentDownloadStats(documentId, timeframe) {
+async function getDocumentDownloadStats(documentId, _timeframe) {
   // Mock document stats
   return {
     documentId,
@@ -402,7 +420,7 @@ function getTimeFilter(timeframe) {
   return { $gte: startDate };
 }
 
-function getCountryFromIp(ip) {
+function getCountryFromIp(_ip) {
   // Simplified - in production, use a geoIP service
   return 'US';
 }

@@ -136,12 +136,15 @@ export async function flushCounters() {
       }
       await restore.exec();
       throw error;
-    } finally {
-      await redis.del(draining);
     }
 
     return { documents: deltas.length };
   } finally {
+    // The draining key carries a timestamp and no TTL, so every path out of
+    // this function has to delete it. Deleting it here rather than around
+    // applyDeltas also covers hGetAll throwing and the empty-deltas early
+    // return, both of which used to leak a key holding real counter data.
+    await redis.del(draining);
     await redis.del(FLUSH_LOCK_KEY);
   }
 }

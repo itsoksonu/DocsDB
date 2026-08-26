@@ -79,7 +79,7 @@ function getDefaultPreferences() {
   };
 }
 
-export async function updateUserPreferences(userId, interactions) {
+export async function updateUserPreferences(userId, _interactions) {
   try {
     if (getRedis()) {
       const cacheKey = `${USER_PREFS_PREFIX}${userId}`;

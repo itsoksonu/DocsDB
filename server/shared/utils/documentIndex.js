@@ -253,6 +253,13 @@ function similarity(query, queryMagnitude, chunk) {
  */
 const MAX_CACHED_FLOATS = 4_000_000; // ~16 MB of Float32
 
+// The float budget alone does not bound this cache. Passages loaded without
+// vectors (no Gemini key, short document, or not embedded yet - the common case)
+// weigh 0 floats, so cachedFloats never rises and the eviction loop below never
+// runs. Each such entry still holds up to MAX_EXTRACT_CHARS of text, so an
+// entry-count ceiling is what actually keeps this bounded.
+const MAX_CACHED_DOCUMENTS = 50;
+
 const passageCache = new Map();
 let cachedFloats = 0;
 
@@ -286,7 +293,10 @@ function writeCache(key, passages) {
   passageCache.set(key, { passages, floats });
   cachedFloats += floats;
 
-  while (cachedFloats > MAX_CACHED_FLOATS && passageCache.size > 1) {
+  while (
+    passageCache.size > 1 &&
+    (cachedFloats > MAX_CACHED_FLOATS || passageCache.size > MAX_CACHED_DOCUMENTS)
+  ) {
     const [oldestKey, oldest] = passageCache.entries().next().value;
     passageCache.delete(oldestKey);
     cachedFloats -= oldest.floats;

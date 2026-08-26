@@ -4,9 +4,16 @@ import Document from "../../shared/models/Document.js";
 import SavedDocument from "../../shared/models/SavedDocument.js";
 import JWTManager from "../../shared/utils/jwt.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import s3 from "../../shared/utils/s3.js";
 
 const router = express.Router();
+
+// Avatar keys are minted by S3Manager.generateFileKey as
+// `avatars/<userId>/<timestamp>-<uuid>.<ext>` - see services/upload/routes.js.
+function isOwnAvatarKey(key, userId) {
+  return new RegExp(`^avatars/${userId}/[\\w.-]+$`).test(key);
+}
 
 // Update user profile
 router.patch("/me", authMiddleware, async (req, res, next) => {
@@ -17,8 +24,16 @@ router.patch("/me", authMiddleware, async (req, res, next) => {
     const updates = {};
     if (name) updates.name = name.trim();
 
-    // Only update avatar if it's a key (not a full URL)
-    if (avatar && !avatar.startsWith("http")) {
+    // Only accept an S3 key inside this user's own avatar prefix. Accepting any
+    // key would let a caller point their avatar at another tenant's object and
+    // read it back through the signed URL generated below.
+    if (avatar !== undefined) {
+      if (typeof avatar !== "string" || !isOwnAvatarKey(avatar, userId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid avatar key",
+        });
+      }
       updates.avatar = avatar;
     }
 
@@ -57,7 +72,7 @@ router.patch("/me", authMiddleware, async (req, res, next) => {
 });
 
 // Refresh token
-router.post("/refresh", async (req, res, next) => {
+router.post("/refresh", rateLimitMiddleware("auth"), async (req, res, next) => {
   try {
     const refreshToken = req.cookies.refreshToken;
 
@@ -70,10 +85,23 @@ router.post("/refresh", async (req, res, next) => {
 
     const decoded = JWTManager.verifyRefreshToken(refreshToken);
 
+    // Rebuild the claims from the database rather than copying them out of the
+    // presented token: otherwise a demoted, suspended or deleted user keeps
+    // their original role for the whole 30-day refresh window by rolling the
+    // token forward.
+    const user = await User.findById(decoded.userId).select("email role status");
+
+    if (!user || user.status !== "active") {
+      return res.status(401).json({
+        success: false,
+        message: "Account is no longer active",
+      });
+    }
+
     const tokenPayload = {
-      userId: decoded.userId,
-      email: decoded.email,
-      role: decoded.role,
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
     };
 
     const newAccessToken = JWTManager.generateAccessToken(tokenPayload);

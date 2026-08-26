@@ -1,0 +1,31 @@
+{
+  "root": true,
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "extends": "eslint:recommended",
+  "ignorePatterns": ["node_modules/", "logs/"],
+  "rules": {
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^(_|next$)",
+        "varsIgnorePattern": "^_",
+        "caughtErrors": "none"
+      }
+    ],
+    "no-empty": ["error", { "allowEmptyCatch": true }],
+    "no-console": "off"
+  },
+  "overrides": [
+    {
+      "files": ["**/__tests__/**/*.mjs", "**/*.test.mjs"],
+      "env": { "node": true }
+    }
+  ]
+}

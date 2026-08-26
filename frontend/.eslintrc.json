@@ -1,0 +1,11 @@
+{
+  "root": true,
+  "extends": "next/core-web-vitals",
+  "rules": {
+    "@next/next/no-img-element": "off",
+
+    "react/no-unescaped-entities": "warn",
+    "@next/next/no-html-link-for-pages": "warn",
+    "jsx-a11y/alt-text": "warn"
+  }
+}

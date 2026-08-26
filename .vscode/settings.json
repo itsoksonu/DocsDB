@@ -1,0 +1,12 @@
+{
+  // This repo has two packages, each with its own ESLint config and its own
+  // node_modules. The ESLint extension otherwise runs from the workspace root,
+  // where `next` is not installed - so eslint-config-next's parser cannot
+  // resolve `next/babel` and every .jsx file reports a parsing error. The CLI
+  // (`next lint`, `eslint .`) is unaffected because it runs inside the package.
+  "eslint.workingDirectories": [
+    { "directory": "frontend", "changeProcessCWD": true },
+    { "directory": "server", "changeProcessCWD": true }
+  ],
+  "eslint.validate": ["javascript", "javascriptreact"]
+}

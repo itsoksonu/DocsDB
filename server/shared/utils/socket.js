@@ -37,3 +37,12 @@ export const getSocketIO = () => {
   }
   return io;
 };
+
+// Shutdown needs to close this without caring whether it was ever initialised,
+// and without the throw above. Open websockets otherwise keep httpServer.close()
+// from ever calling back.
+export const closeSocket = async () => {
+  if (!io) return;
+  await new Promise((resolve) => io.close(resolve));
+  io = null;
+};

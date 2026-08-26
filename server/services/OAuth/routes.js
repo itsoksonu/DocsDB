@@ -21,7 +21,9 @@ const oauthValidation = [
     .equals("google")
     .withMessage("Only Google OAuth is supported"),
   body("accessToken").notEmpty(),
-  body("providerId").notEmpty(),
+  // Accepted for backwards compatibility with existing clients but ignored:
+  // the provider id is read from the verified ID token, never from the body.
+  body("providerId").optional(),
 ];
 
 router.post(
@@ -39,16 +41,13 @@ router.post(
         });
       }
 
-      const { provider, accessToken, providerId, email, name, avatar } =
-        req.body;
+      const { provider, accessToken } = req.body;
 
       let verifiedUserInfo;
-      let actualProviderId = providerId;
 
       try {
         if (provider === "google") {
           verifiedUserInfo = await verifyGoogleToken(accessToken);
-          actualProviderId = verifiedUserInfo.sub;
         }
       } catch (error) {
         return res.status(401).json({
@@ -57,9 +56,13 @@ router.post(
         });
       }
 
-      const userEmail = email || verifiedUserInfo?.email;
-      const userName = name || verifiedUserInfo?.name;
-      const userAvatar = avatar || verifiedUserInfo?.picture;
+      // Identity comes from the verified ID token only. Trusting the
+      // client-supplied email/providerId here would let anyone with their own
+      // valid Google token link themselves to an arbitrary account.
+      const actualProviderId = verifiedUserInfo.sub;
+      const userEmail = verifiedUserInfo.email;
+      const userName = verifiedUserInfo.name;
+      const userAvatar = verifiedUserInfo.picture;
 
       const link = await UserAuthProvider.findByProvider(
         provider,
@@ -144,6 +147,12 @@ async function verifyGoogleToken(accessToken) {
 
   if (!payload) {
     throw new Error("Invalid Google token");
+  }
+
+  // Without this check an unverified Google address could be used to claim an
+  // existing DocsDB account that was created with the same email.
+  if (payload.email_verified !== true) {
+    throw new Error("Google account email is not verified");
   }
 
   return {

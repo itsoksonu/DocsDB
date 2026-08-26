@@ -47,8 +47,8 @@ export default function Contact() {
                     Get in Touch
                   </h2>
                   <p className="text-dark-200 mb-6">
-                    Have questions about DocsDB? We're here to help. Send us a
-                    message and we'll respond as soon as possible.
+                    Have questions about DocsDB? We&apos;re here to help. Send us a
+                    message and we&apos;ll respond as soon as possible.
                   </p>
                 </div>
 

@@ -1,10 +1,17 @@
 import logger from '../utils/logger.js';
 
+// Opt IN to verbose errors rather than opting out of them. Gating on
+// `NODE_ENV !== 'production'` means a deployment where the variable is unset or
+// misspelled silently returns raw messages and full stack traces to clients.
+const exposeInternals = process.env.DEBUG_ERRORS === 'true';
+
 export const errorHandler = (error, req, res, next) => {
   logger.error('Error occurred:', {
     message: error.message,
     stack: error.stack,
-    url: req.originalUrl,
+    // req.path, not originalUrl: the query string can carry tokens and emails,
+    // and these logs are retained on disk.
+    path: req.path,
     method: req.method,
     ip: req.ip,
     userAgent: req.get('User-Agent')
@@ -50,13 +57,10 @@ export const errorHandler = (error, req, res, next) => {
 
   // Default error
   const statusCode = error.statusCode || 500;
-  const message = process.env.NODE_ENV === 'production' 
-    ? 'Something went wrong' 
-    : error.message;
 
   res.status(statusCode).json({
     success: false,
-    message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
+    message: exposeInternals ? error.message : 'Something went wrong',
+    ...(exposeInternals && { stack: error.stack })
   });
 };

@@ -8,7 +8,10 @@
 //   FETCHER_CONTACT_EMAIL=admin@mysite.com
 import cron from "node-cron";
 import { v4 as uuidv4 } from "uuid";
-import { processDocumentQueue } from "../../shared/queues/processQueue.js";
+import {
+  processDocumentQueue,
+  FETCH_JOB_OPTIONS,
+} from "../../shared/queues/processQueue.js";
 import { resolveOwnerId } from "../../shared/utils/documentFetcher/fetcher.js";
 import logger from "../../shared/utils/logger.js";
 
@@ -62,7 +65,7 @@ async function runFetchCycle() {
     await processDocumentQueue.add(
       "fetch-documents",
       { category, count, requestedBy: owner },
-      { jobId }
+      { ...FETCH_JOB_OPTIONS, jobId }
     );
     logger.info(`[fetcher:cron] queued job ${jobId} for category="${category}"`);
   }
@@ -75,17 +78,17 @@ async function runFetchCycle() {
 export function initFetcherCron() {
   if (process.env.FETCHER_CRON_ENABLED !== "true") {
     logger.info("[fetcher:cron] disabled (set FETCHER_CRON_ENABLED=true to enable)");
-    return;
+    return null;
   }
 
   const schedule = process.env.FETCHER_CRON_SCHEDULE || DEFAULT_SCHEDULE;
 
   if (!cron.validate(schedule)) {
     logger.error(`[fetcher:cron] invalid FETCHER_CRON_SCHEDULE "${schedule}" — cron not started`);
-    return;
+    return null;
   }
 
-  cron.schedule(schedule, () => {
+  const task = cron.schedule(schedule, () => {
     runFetchCycle().catch((err) =>
       logger.error(`[fetcher:cron] run failed: ${err.message}`)
     );
@@ -96,6 +99,11 @@ export function initFetcherCron() {
       getCategories().join(", ") || "(none configured)"
     }`
   );
+
+  // Returned so shutdown can stop it. node-cron's timer otherwise keeps the
+  // event loop alive, which only went unnoticed because shutdown calls
+  // process.exit() explicitly.
+  return task;
 }
 
 export default initFetcherCron;

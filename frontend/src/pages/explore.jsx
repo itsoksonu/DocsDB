@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { DesktopNavbar } from "../components/layout/DesktopNavbar";
@@ -112,13 +112,17 @@ export default function Explore() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [totalResults, setTotalResults] = useState(0);
-  const [searchPage, setSearchPage] = useState(1);
 
   const browsePageRef = useRef(1);
+  // A ref, matching browsePageRef above. As state it was both a dependency of
+  // loadDocuments and set by it, which is what made the effect below unable to
+  // depend on the callback without looping. Nothing renders it.
+  const searchPageRef = useRef(1);
   const sentinelRef = useRef(null);
   const isLoadingRef = useRef(false);
   const sortRef = useRef(null);
   const loadedCountRef = useRef(0);
+  const loadSeqRef = useRef(0);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -156,13 +160,21 @@ export default function Explore() {
     pushRoute(selectedCategory, sort, searchQuery, type);
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const debouncedSearch = useCallback(
-    debounce((val) => {
-      pushRoute(selectedCategory, sort, val, searchType);
-    }, 500),
-    [selectedCategory, sort, searchType]
+  // useMemo, not useCallback: useCallback around a debounce() call creates a new
+  // debounced function whenever the deps change without cancelling the previous
+  // one, so a keystroke still pending would push a route built from stale
+  // filters.
+  const debouncedSearch = useMemo(
+    () =>
+      debounce((val) => {
+        pushRoute(selectedCategory, sort, val, searchType);
+      }, 500),
+    [pushRoute, selectedCategory, sort, searchType]
   );
+
+  // Cancels the old debounce when the deps change, and on unmount - otherwise a
+  // pending call fires router.push() after the page is gone.
+  useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
 
   const handleInputChange = (e) => {
     const val = e.target.value;
@@ -179,14 +191,23 @@ export default function Explore() {
 
   const loadDocuments = useCallback(
     async (reset = false) => {
-      if (isLoadingRef.current) return;
+      // A reset (category / sort / search change) must never be dropped. The
+      // guard used to bail on any in-flight load, so switching category while a
+      // fetch was running silently kept the previous category's results with no
+      // error and no retry. Infinite-scroll pages still coalesce.
+      if (!reset && isLoadingRef.current) return;
       isLoadingRef.current = true;
+
+      // Supersede any older in-flight load so its response cannot overwrite the
+      // results of this one.
+      const seq = ++loadSeqRef.current;
+      const isCurrent = () => seq === loadSeqRef.current;
 
       try {
         if (reset) {
           setLoading(true);
           browsePageRef.current = 1;
-          setSearchPage(1);
+          searchPageRef.current = 1;
           setDocuments([]);
           setHasMore(true);
           setTotalResults(0);
@@ -198,7 +219,7 @@ export default function Explore() {
         let response;
         if (isSearchMode) {
           // Use same searchDocuments logic as search.jsx
-          const currentPage = reset ? 1 : searchPage;
+          const currentPage = reset ? 1 : searchPageRef.current;
           const params = {
             q: searchQuery.trim(),
             type: searchType,
@@ -207,6 +228,7 @@ export default function Explore() {
           };
           if (selectedCategory) params.category = selectedCategory;
           response = await apiService.searchDocuments(params);
+          if (!isCurrent()) return;
 
           const newDocs = (response.data?.documents || []).filter(
             (d) => d.status === "processed"
@@ -226,13 +248,14 @@ export default function Explore() {
           // Stop when we get an empty page or the API says no more
           const searchHasMore = newDocs.length > 0 && pagination.hasMore !== false;
           setHasMore(searchHasMore);
-          setSearchPage(reset ? 2 : (p) => p + 1);
+          searchPageRef.current = reset ? 2 : searchPageRef.current + 1;
         } else {
           // Browse mode — page-based via getFeed
           const currentBrowsePage = reset ? 1 : browsePageRef.current;
           const params = { sort, limit: 20, page: currentBrowsePage };
           if (selectedCategory) params.category = selectedCategory;
           response = await apiService.getFeed(params);
+          if (!isCurrent()) return;
 
           const newDocs = (response.data?.documents || response.documents || []).filter(
             (d) => d.status === "processed"
@@ -258,21 +281,27 @@ export default function Explore() {
           setHasMore(browseHasMore);
         }
       } catch (err) {
-        toast.error("Failed to load documents");
-        console.error(err);
+        if (isCurrent()) {
+          toast.error("Failed to load documents");
+          console.error(err);
+        }
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
-        isLoadingRef.current = false;
+        if (isCurrent()) {
+          setLoading(false);
+          setLoadingMore(false);
+          isLoadingRef.current = false;
+        }
       }
     },
-    [selectedCategory, sort, searchQuery, searchType, isSearchMode, searchPage]
+    [selectedCategory, sort, searchQuery, searchType, isSearchMode]
   );
 
+  // loadDocuments' own deps cover the four filter values this effect used to
+  // list; isSearchMode is derived from searchQuery, so nothing new fires.
   useEffect(() => {
     if (!router.isReady) return;
     loadDocuments(true);
-  }, [selectedCategory, sort, searchQuery, searchType, router.isReady]);
+  }, [loadDocuments, router.isReady]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -315,7 +344,11 @@ export default function Explore() {
   return (
     <>
       <Head>
-        <title>{activeCat ? `${activeCat.name} — Explore` : "Explore"} - DocsDB</title>
+        {/* Single expression: a title with two children is an array of text
+            nodes, which breaks hydration. */}
+        <title>{`${
+          activeCat ? `${activeCat.name} — Explore` : "Explore"
+        } - DocsDB`}</title>
         <meta
           name="description"
           content={

@@ -11,7 +11,10 @@ import {
   X,
   Upload,
   Bookmark,
-  Image,
+  // Aliased: jsx-a11y/alt-text matches on the component *name*, so an icon
+  // called `Image` gets flagged as needing an alt prop. It is a lucide icon,
+  // not an <img> - and the alias also stops it being mistaken for next/image.
+  Image as ImageIcon,
   Mail,
   Search,
   Loader2,
@@ -34,7 +37,6 @@ const ProfilePage = () => {
 
   // Search & Pagination
   const [searchQuery, setSearchQuery] = useState("");
-  const [nextCursor, setNextCursor] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const observer = useRef();
@@ -49,6 +51,91 @@ const ProfilePage = () => {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [savedLoading, setSavedLoading] = useState(false);
   const [stats, setStats] = useState({ uploadedCount: 0, savedCount: 0 });
+
+  // Collection renaming state. These were declared further down, *after* the
+  // `if (!user) return null` early return - so the hook count differed between
+  // a logged-out and a logged-in render, which React answers with "Rendered
+  // more hooks than during the previous render".
+  const [editingCollection, setEditingCollection] = useState(null); // { id, name }
+  const [renameValue, setRenameValue] = useState("");
+  const [renameLoading, setRenameLoading] = useState(false);
+
+  // The cursor for the next page. A ref rather than state because nothing
+  // renders it - it was only ever read back by the following request, and as a
+  // dependency of loadDocuments (which also sets it) it made that callback
+  // impossible for an effect to depend on without looping.
+  const nextCursorRef = useRef(null);
+
+  // These three are declared above the effects that name them in a dependency
+  // array: dependency arrays are evaluated during render, so a `const` arrow
+  // function defined further down would still be in its temporal dead zone.
+  const fetchCollections = useCallback(async () => {
+    try {
+      const response = await apiService.getCollections();
+      setCollections(response.data || []);
+    } catch (error) {
+      console.error("Error fetching collections:", error);
+    }
+  }, []);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const response = await apiService.getUserStats();
+      setStats(response.data);
+    } catch (error) {
+      console.error("Error loading stats:", error);
+    }
+  }, []);
+
+  const loadDocuments = useCallback(
+    async (isInitial = false) => {
+      if (isInitial) setLoading(true);
+      else setIsFetchingMore(true);
+
+      try {
+        const cursor = isInitial ? null : nextCursorRef.current;
+        const params = {
+          limit: 20,
+          cursor,
+          search: searchQuery,
+        };
+
+        let response;
+        if (activeTab === "uploaded") {
+          response = await apiService.getUserDocuments({
+            ...params,
+            status: "all",
+          });
+          setUploadedDocs((prev) =>
+            isInitial
+              ? response.data.documents
+              : [...prev, ...response.data.documents]
+          );
+        } else {
+          // Add collection filter
+          if (selectedCollectionId !== "all") {
+            params.collectionId = selectedCollectionId;
+          }
+          response = await apiService.getSavedDocuments(params);
+          setSavedDocs((prev) =>
+            isInitial
+              ? response.data.documents
+              : [...prev, ...response.data.documents]
+          );
+        }
+
+        nextCursorRef.current = response.data.nextCursor;
+        setHasMore(!!response.data.nextCursor);
+      } catch (error) {
+        console.error("Error loading documents:", error);
+        toast.error("Failed to load documents");
+      } finally {
+        if (isInitial) setLoading(false);
+        else setIsFetchingMore(false);
+      }
+    },
+    [searchQuery, activeTab, selectedCollectionId]
+  );
 
   useEffect(() => {
     if (user === null) {
@@ -71,63 +158,51 @@ const ProfilePage = () => {
     if (user && activeTab === "saved") {
       fetchCollections();
     }
-  }, [user, activeTab]);
+  }, [user, activeTab, fetchCollections]);
 
-  const fetchCollections = async () => {
-    try {
-      const response = await apiService.getCollections();
-      setCollections(response.data || []);
-    } catch (error) {
-      console.error("Error fetching collections:", error);
-    }
-  };
-
-  // Debounce search
+  // Debounce search. loadDocuments' own deps include searchQuery and
+  // selectedCollectionId, so depending on the callback covers what this effect
+  // used to list by hand.
   useEffect(() => {
     const timer = setTimeout(() => {
       setUploadedDocs([]);
       setSavedDocs([]);
-      setNextCursor(null);
+      nextCursorRef.current = null;
       setHasMore(true);
       loadDocuments(true);
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, selectedCollectionId]); // Trigger also when collection changes
+  }, [loadDocuments]);
 
   // Fetch stats...
   useEffect(() => {
     if (user) {
       loadStats();
     }
-  }, [user, uploadedDocs.length, savedDocs.length]); // Refresh stats when docs change
+  }, [user, uploadedDocs.length, savedDocs.length, loadStats]); // Refresh stats when docs change
 
-  const loadStats = async () => {
-    try {
-      const response = await apiService.getUserStats();
-      setStats(response.data);
-    } catch (error) {
-      console.error("Error loading stats:", error);
-    }
-  };
-
-  // Reset pagination when tab changes
+  // Reset pagination when the tab or user changes. This deliberately no longer
+  // calls loadDocuments: activeTab is one of loadDocuments' own dependencies, so
+  // changing tabs already re-creates it and re-runs the loader effect above.
+  // Both effects used to call loadDocuments(true), which meant two identical
+  // requests on mount and on every tab switch.
   useEffect(() => {
-    if (user) {
-      setUploadedDocs([]);
-      setSavedDocs([]);
-      setNextCursor(null);
-      setHasMore(true);
-      // Reset collection selection when switching/loading tabs
-      if (activeTab === "uploaded") {
-        setSelectedCollectionId("all");
-      } else {
-        // For saved tab, start with collections view
-        setViewMode("collections");
-        setSelectedCollectionId("all");
-        setSelectedCollectionName("All Saved");
-      }
-      loadDocuments(true);
+    if (!user) return;
+
+    setUploadedDocs([]);
+    setSavedDocs([]);
+    nextCursorRef.current = null;
+    setHasMore(true);
+
+    // Reset collection selection when switching/loading tabs
+    if (activeTab === "uploaded") {
+      setSelectedCollectionId("all");
+    } else {
+      // For saved tab, start with collections view
+      setViewMode("collections");
+      setSelectedCollectionId("all");
+      setSelectedCollectionName("All Saved");
     }
   }, [activeTab, user]);
 
@@ -142,55 +217,8 @@ const ProfilePage = () => {
       });
       if (node) observer.current.observe(node);
     },
-    [loading, isFetchingMore, hasMore]
+    [loading, isFetchingMore, hasMore, loadDocuments]
   );
-
-  const loadDocuments = async (isInitial = false) => {
-    if (isInitial) setLoading(true);
-    else setIsFetchingMore(true);
-
-    try {
-      const cursor = isInitial ? null : nextCursor;
-      const params = {
-        limit: 20,
-        cursor,
-        search: searchQuery,
-      };
-
-      let response;
-      if (activeTab === "uploaded") {
-        response = await apiService.getUserDocuments({
-          ...params,
-          status: "all",
-        });
-        setUploadedDocs((prev) =>
-          isInitial
-            ? response.data.documents
-            : [...prev, ...response.data.documents]
-        );
-      } else {
-        // Add collection filter
-        if (selectedCollectionId !== "all") {
-          params.collectionId = selectedCollectionId;
-        }
-        response = await apiService.getSavedDocuments(params);
-        setSavedDocs((prev) =>
-          isInitial
-            ? response.data.documents
-            : [...prev, ...response.data.documents]
-        );
-      }
-
-      setNextCursor(response.data.nextCursor);
-      setHasMore(!!response.data.nextCursor);
-    } catch (error) {
-      console.error("Error loading documents:", error);
-      toast.error("Failed to load documents");
-    } finally {
-      if (isInitial) setLoading(false);
-      else setIsFetchingMore(false);
-    }
-  };
 
   const handleEditToggle = () => {
     if (editing) {
@@ -287,11 +315,6 @@ const ProfilePage = () => {
 
   const uploadedCount = stats.uploadedCount;
   const savedCount = stats.savedCount;
-
-  // Collection renaming state
-  const [editingCollection, setEditingCollection] = useState(null); // { id, name }
-  const [renameValue, setRenameValue] = useState("");
-  const [renameLoading, setRenameLoading] = useState(false);
 
   const handleRenameClick = (e, collection) => {
     e.stopPropagation();
@@ -434,7 +457,7 @@ const ProfilePage = () => {
                         onChange={handleAvatarUpload}
                         className="hidden"
                       />
-                      <Image size={24} className="text-white" />
+                      <ImageIcon size={24} className="text-white" />
                     </label>
                   )}
                 </div>

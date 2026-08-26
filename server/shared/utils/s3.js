@@ -10,6 +10,23 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v4 as uuidv4 } from "uuid";
 import logger from "./logger.js";
 
+export function sanitizeFilename(filename) {
+  const safe = String(filename || "download").replace(/[^\w.-]+/g, "_");
+  return safe.slice(0, 200) || "download";
+}
+
+// Object-key extensions are taken from client-supplied filenames, so bound them
+// to a plain alphanumeric extension: `x.tar/../../secret` would otherwise put
+// `../` into the key, which becomes real path traversal in any worker that maps
+// the key onto a local temp path.
+export function safeExtension(originalFilename) {
+  const ext = String(originalFilename || "")
+    .split(".")
+    .pop()
+    .toLowerCase();
+  return /^[a-z0-9]{1,8}$/.test(ext) ? ext : "bin";
+}
+
 class S3Manager {
   constructor() {
     this.s3Client = new S3Client({
@@ -60,7 +77,12 @@ class S3Manager {
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-        ResponseContentDisposition: `attachment; filename="${filename}"`,
+        // originalFilename is user-supplied. An embedded quote would break out
+        // of the quoted-string and inject extra Content-Disposition parameters
+        // into the response S3 emits, so keep it to a safe character set.
+        ResponseContentDisposition: `attachment; filename="${sanitizeFilename(
+          filename
+        )}"`,
       });
 
       return await getSignedUrl(this.s3Client, command, { expiresIn });
@@ -190,7 +212,7 @@ class S3Manager {
   }
 
   generateFileKey(userId, originalFilename, prefix = "uploads") {
-    const extension = originalFilename.split(".").pop();
+    const extension = safeExtension(originalFilename);
     const timestamp = Date.now();
     const uniqueId = uuidv4();
 

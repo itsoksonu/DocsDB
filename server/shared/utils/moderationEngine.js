@@ -14,7 +14,10 @@ export async function moderateContent(documentId, options = {}) {
       return { success: false, message: "Document not found" };
     }
 
-    const { autoApprove = true, checkSensitiveContent = true } = options;
+    // checkSensitiveContent is accepted and then ignored - passing false does
+    // nothing. Left in place rather than removed because it documents the
+    // intended API; see the STUB note on performAIModeration below.
+    const { autoApprove = true } = options;
 
     const moderationResult = await performAIModeration(document);
 
@@ -257,10 +260,26 @@ export async function generateAdminStats() {
 }
 
 // Helper functions
-async function performAIModeration(document) {
-  // Placeholder for AI moderation service
-  // This would integrate with services like OpenAI Moderation, Google Perspective, etc.
 
+// ============================================================================
+// STUB - THERE IS NO CONTENT MODERATION.
+//
+// This ignores the document entirely (hence `_document`) and flags it with a 5%
+// random probability. Nothing about the actual file is examined.
+//
+// It is also unreachable: moderateContent() above is the only caller, and
+// moderateContent() itself has no callers anywhere in the codebase - it was
+// imported into services/admin/routes.js and never used. So uploads are
+// currently never screened, automatically or otherwise; the only moderation
+// path that works is a human acting on a user report via
+// POST /admin/moderation/:reportId/process.
+//
+// Wiring this up needs a real provider (OpenAI Moderation, Google Perspective,
+// AWS Rekognition for images) and a decision about what happens on a flag -
+// quarantine, queue for review, or reject the upload. Until then, do not read
+// the absence of flagged documents as evidence that content is clean.
+// ============================================================================
+async function performAIModeration(_document) {
   const mockResult = {
     flagged: Math.random() < 0.05, // 5% chance of flagging
     confidence: Math.random(),

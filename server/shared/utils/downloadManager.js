@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import Document from '../models/Document.js';
 import { getRedis } from './redis.js';
 import { getSponsoredDocuments } from './adManager.js';
@@ -104,7 +105,7 @@ export async function createDownloadSession({ documentId, userId, userIp, userAg
   }
 }
 
-export async function completeDownloadSession(sessionId, userId, adCompleted = false) {
+export async function completeDownloadSession(sessionId, userId, documentId) {
   try {
     if (!getRedis()) {
       return { valid: false, message: 'Session storage unavailable' };
@@ -112,7 +113,7 @@ export async function completeDownloadSession(sessionId, userId, adCompleted = f
 
     const sessionKey = `download:session:${sessionId}`;
     const sessionData = await getRedis().get(sessionKey);
-    
+
     if (!sessionData) {
       return { valid: false, message: 'Download session expired or invalid' };
     }
@@ -121,6 +122,14 @@ export async function completeDownloadSession(sessionId, userId, adCompleted = f
 
     if (session.userId !== userId) {
       return { valid: false, message: 'Invalid session for user' };
+    }
+
+    // The session must be the one created for this document. Without this check
+    // a session opened against the caller's own document (which skips the ad and
+    // timer) could be redeemed for any other document id, bypassing
+    // validateDownloadRequest entirely.
+    if (session.documentId !== documentId) {
+      return { valid: false, message: 'Session does not match document' };
     }
 
     if (session.completed) {
@@ -135,7 +144,9 @@ export async function completeDownloadSession(sessionId, userId, adCompleted = f
         return { valid: false, message: 'Download timer not completed' };
       }
 
-      if (!session.adViewed && !adCompleted) {
+      // Only the server-side flag set by POST /ad/view counts. A client-supplied
+      // "adCompleted" boolean would make the ad gate opt-out.
+      if (!session.adViewed) {
         return { valid: false, message: 'Ad viewing required' };
       }
     }
@@ -155,7 +166,7 @@ export async function completeDownloadSession(sessionId, userId, adCompleted = f
   }
 }
 
-export async function getAdForDownload(userId) {
+export async function getAdForDownload(_userId) {
   try {
     const sponsoredDocs = await getSponsoredDocuments(1);
     
@@ -258,8 +269,16 @@ async function recordDownloadAttempt(key, timestamp) {
   if (!getRedis()) return;
 
   try {
-    await getRedis().rPush(key, timestamp.toString());
-    await getRedis().expire(key, 24 * 60 * 60);
+    // lTrim caps the list: the only pruning used to happen incidentally inside
+    // getRecentDownloadsCount, so a busy key could grow without limit. The TTL
+    // is set with NX so it is not refreshed on every push - an active user or a
+    // shared NAT address previously kept its key alive forever.
+    await getRedis()
+      .multi()
+      .rPush(key, timestamp.toString())
+      .lTrim(key, -(MAX_DOWNLOADS_PER_HOUR * 3), -1)
+      .expire(key, 24 * 60 * 60, 'NX')
+      .exec();
   } catch (error) {
     logger.error('Error recording download attempt:', error);
   }
@@ -278,7 +297,7 @@ async function checkRecentDownload(documentId, userId) {
   }
 }
 
-async function recordDownloadCompletion(documentId, userId, userIp) {
+async function recordDownloadCompletion(documentId, userId, _userIp) {
   if (!getRedis()) return;
 
   try {
@@ -299,38 +318,12 @@ async function trackDownloadAttempt(documentId, userId, userIp) {
   logger.info(`Download attempt: user ${userId} for document ${documentId} from IP ${userIp}`);
 }
 
+// Session ids are bearer credentials for a signed download URL, so they must be
+// unguessable - Date.now() + Math.random() is neither uniform nor unpredictable.
 function generateSessionId() {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substr(2, 16);
-  return `dl_${timestamp}_${random}`;
+  return `dl_${crypto.randomBytes(16).toString('hex')}`;
 }
 
-// Clean up expired sessions (cron job)
-export async function cleanupExpiredSessions() {
-  if (!getRedis()) return;
-
-  try {
-    // This would be more efficient with Redis TTL, but we'll check periodically
-    const sessionKeys = await getRedis().keys('download:session:*');
-    const now = Date.now();
-    
-    let cleaned = 0;
-    
-    for (const key of sessionKeys) {
-      const sessionData = await getRedis().get(key);
-      if (sessionData) {
-        const session = JSON.parse(sessionData);
-        if (session.expiresAt < now) {
-          await getRedis().del(key);
-          cleaned++;
-        }
-      }
-    }
-
-    if (cleaned > 0) {
-      logger.info(`Cleaned up ${cleaned} expired download sessions`);
-    }
-  } catch (error) {
-    logger.error('Error cleaning up expired sessions:', error);
-  }
-}
+// Note: the previous cleanupExpiredSessions() helper was removed. It was never
+// called, and session keys already carry a Redis TTL (see createDownloadSession),
+// so the O(keyspace) `KEYS` scan it performed was both redundant and blocking.

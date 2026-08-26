@@ -7,7 +7,10 @@ import { body, param, validationResult } from "express-validator";
 import { v4 as uuidv4 } from "uuid";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import Document from "../../shared/models/Document.js";
-import { processDocumentQueue } from "../../shared/queues/processQueue.js";
+import {
+  processDocumentQueue,
+  FETCH_JOB_OPTIONS,
+} from "../../shared/queues/processQueue.js";
 import logger from "../../shared/utils/logger.js";
 
 const router = express.Router();
@@ -45,7 +48,7 @@ router.post(
       await processDocumentQueue.add(
         "fetch-documents",
         { category, count, requestedBy: req.user.userId },
-        { jobId }
+        { ...FETCH_JOB_OPTIONS, jobId }
       );
 
       logger.info(

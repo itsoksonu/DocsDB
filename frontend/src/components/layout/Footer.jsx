@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import toast from "react-hot-toast";
 import { useAuth } from "../../contexts/AuthContext";
 import { useGoogleAuth } from "../../hooks/useGoogleAuth";
@@ -15,16 +15,10 @@ const Footer = () => {
     useGoogleAuth();
   const [signingIn, setSigningIn] = useState(false);
 
-  useEffect(() => {
-    if (!user && isGoogleLoaded) {
-      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-      if (clientId) {
-        initializeGoogleOneTap(clientId, handleGoogleResponse);
-      }
-    }
-  }, [user, isGoogleLoaded]);
-
-  const handleGoogleResponse = async (response) => {
+  // Declared before the effect that lists it: dependency arrays are evaluated
+  // during render, so a `const` defined below would still be in its temporal
+  // dead zone. handleGoogleOAuth is memoized in AuthContext, so this is stable.
+  const handleGoogleResponse = useCallback(async (response) => {
     setSigningIn(true);
     try {
       await handleGoogleOAuth(response);
@@ -37,7 +31,16 @@ const Footer = () => {
     } finally {
       setSigningIn(false);
     }
-  };
+  }, [handleGoogleOAuth, router]);
+
+  useEffect(() => {
+    if (!user && isGoogleLoaded) {
+      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+      if (clientId) {
+        initializeGoogleOneTap(clientId, handleGoogleResponse);
+      }
+    }
+  }, [user, isGoogleLoaded, initializeGoogleOneTap, handleGoogleResponse]);
 
   const handleSignIn = async () => {
     if (signingIn) return;

@@ -1,3 +1,7 @@
+// mongoose is used for new mongoose.Types.ObjectId(...) in the aggregation
+// pipelines below. It was never imported, so every one of those code paths threw
+// a ReferenceError at runtime.
+import mongoose from 'mongoose';
 import Earnings from '../models/Earnings.js';
 import Payouts from '../models/Payouts.js';
 import UserWallet from '../models/UserWallet.js';
@@ -21,7 +25,9 @@ const MIN_PAYOUT_AMOUNT = 50; // $50
 // Calculate earnings function
 export async function calculateEarnings(eventType, data) {
   try {
-    const { documentId, userId, duration, country, deviceType, adType } = data;
+    // Note: no userId here on purpose. Earnings are credited to the document's
+    // owner (document.userId below), not to whoever triggered the event.
+    const { documentId, duration, country, deviceType, adType } = data;
 
     const document = await Document.findById(documentId);
     if (!document || !document.monetizationEnabled) {

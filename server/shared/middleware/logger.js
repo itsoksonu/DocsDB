@@ -39,7 +39,9 @@ export const requestLogger = (req, res, next) => {
     const duration = Date.now() - start;
     logger.info('HTTP Request', {
       method: req.method,
-      url: req.url,
+      // req.path, not req.url: the query string carries search terms, cursors
+      // and (on some clients) tokens, and these files are retained on disk.
+      path: req.path,
       status: res.statusCode,
       duration: `${duration}ms`,
       ip: req.ip,

@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, useRef } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import { apiService } from "../services/api";
 
 const AuthContext = createContext();
@@ -18,28 +26,68 @@ export const AuthProvider = ({ children }) => {
   const refreshIntervalRef = useRef(null);
   const isInitialMount = useRef(true);
 
+  // `refreshing` stays as state because it is published on the context, but the
+  // in-flight check below reads this ref instead. setState is asynchronous, so
+  // two calls landing in the same tick could both see refreshing === false and
+  // both fire a refresh - the mutex only actually holds as a ref.
+  const refreshingRef = useRef(false);
+
+  // The interval and the refresh callback need the current user without either
+  // of them depending on it. Reading state directly meant the 13-minute interval
+  // was torn down and rebuilt on every user change.
+  const userRef = useRef(user);
   useEffect(() => {
-    // Only run checkAuth on initial mount
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      checkAuth();
-    }
-
-    // Set up refresh interval
-    refreshIntervalRef.current = setInterval(() => {
-      if (user) {
-        refreshTokenSilently();
-      }
-    }, 13 * 60 * 1000); // Refresh every 13 minutes
-
-    return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
-      }
-    };
+    userRef.current = user;
   }, [user]);
 
-  const checkAuth = async () => {
+  // Declared before checkAuth, which depends on it. A dependency array is
+  // evaluated during render, so the callback it names has to already exist.
+  const refreshTokenSilently = useCallback(async () => {
+    if (refreshingRef.current) {
+      return false;
+    }
+
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      const response = await apiService.refreshToken();
+      const newAccessToken = response.data.accessToken;
+
+      if (newAccessToken) {
+        localStorage.setItem("accessToken", newAccessToken);
+
+        // Fetch user data if we don't have it
+        if (!userRef.current) {
+          try {
+            const userResponse = await apiService.getCurrentUser();
+            setUser(userResponse.data.user);
+          } catch (err) {
+            console.error("Failed to fetch user after refresh:", err);
+          }
+        }
+
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error("Token refresh failed:", error);
+
+      // Only logout if it's a 401 (unauthorized) error
+      if (error.response?.status === 401) {
+        localStorage.removeItem("accessToken");
+        setUser(null);
+      }
+
+      return false;
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+    // Reads user and the in-flight flag through refs, so this callback is
+    // created once and the interval below is never rebuilt.
+  }, []);
+
+  const checkAuth = useCallback(async () => {
     setLoading(true);
     try {
       const token = localStorage.getItem("accessToken");
@@ -81,57 +129,42 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [refreshTokenSilently]);
 
-  const refreshTokenSilently = async () => {
-    if (refreshing) {
-      return false;
+  // Both callbacks above are stable, so this runs once: the 13-minute interval
+  // is created a single time instead of being torn down and rebuilt on every
+  // change to `user`.
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      checkAuth();
     }
 
-    setRefreshing(true);
-    try {
-      const response = await apiService.refreshToken();
-      const newAccessToken = response.data.accessToken;
-
-      if (newAccessToken) {
-        localStorage.setItem("accessToken", newAccessToken);
-
-        // Fetch user data if we don't have it
-        if (!user) {
-          try {
-            const userResponse = await apiService.getCurrentUser();
-            setUser(userResponse.data.user);
-          } catch (err) {
-            console.error("Failed to fetch user after refresh:", err);
-          }
-        }
-
-        return true;
+    refreshIntervalRef.current = setInterval(() => {
+      if (userRef.current) {
+        refreshTokenSilently();
       }
-      return false;
-    } catch (error) {
-      console.error("Token refresh failed:", error);
+    }, 13 * 60 * 1000);
 
-      // Only logout if it's a 401 (unauthorized) error
-      if (error.response?.status === 401) {
-        localStorage.removeItem("accessToken");
-        setUser(null);
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
       }
+    };
+  }, [checkAuth, refreshTokenSilently]);
 
-      return false;
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const oauthLogin = async (oauthData) => {
+  // Memoized like the callbacks above, and the context value with them. Footer
+  // and DesktopNavbar build a `handleGoogleResponse` callback around
+  // handleGoogleOAuth and name it in an effect dependency array, so an unstable
+  // function here would re-initialize Google One Tap on every render.
+  const oauthLogin = useCallback(async (oauthData) => {
     const response = await apiService.oauthLogin(oauthData);
     localStorage.setItem("accessToken", response.data.accessToken);
     setUser(response.data.user);
     return response;
-  };
+  }, []);
 
-  const updateUser = async (data) => {
+  const updateUser = useCallback(async (data) => {
     try {
       const response = await apiService.updateProfile(data);
       if (response && response.data && response.data.user) {
@@ -143,9 +176,9 @@ export const AuthProvider = ({ children }) => {
       console.error("Error updating user:", error);
       throw error;
     }
-  };
+  }, []);
 
-  const handleGoogleOAuth = async (googleResponse) => {
+  const handleGoogleOAuth = useCallback(async (googleResponse) => {
     try {
       const credential = googleResponse.credential;
 
@@ -153,18 +186,13 @@ export const AuthProvider = ({ children }) => {
         throw new Error("No credential received from Google");
       }
 
-      const payload = JSON.parse(atob(credential.split(".")[1]));
-
-      const oauthData = {
+      // Send only the credential. Identity (sub/email/name/picture) is read from
+      // the verified ID token on the server - decoding it here and posting the
+      // fields separately meant a crafted body could claim another account.
+      const response = await apiService.oauthLogin({
         provider: "google",
         accessToken: credential,
-        providerId: payload.sub,
-        email: payload.email,
-        name: payload.name,
-        avatar: payload.picture,
-      };
-
-      const response = await apiService.oauthLogin(oauthData);
+      });
       localStorage.setItem("accessToken", response.data.accessToken);
       setUser(response.data.user);
 
@@ -173,9 +201,9 @@ export const AuthProvider = ({ children }) => {
       console.error("Google OAuth login failed:", error);
       throw error;
     }
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await apiService.logout();
     } catch (error) {
@@ -189,18 +217,30 @@ export const AuthProvider = ({ children }) => {
         clearInterval(refreshIntervalRef.current);
       }
     }
-  };
+  }, []);
 
-  const value = {
-    user,
-    updateUser,
-    oauthLogin,
-    handleGoogleOAuth,
-    logout,
-    loading,
-    refreshing,
-    refreshToken: refreshTokenSilently,
-  };
+  const value = useMemo(
+    () => ({
+      user,
+      updateUser,
+      oauthLogin,
+      handleGoogleOAuth,
+      logout,
+      loading,
+      refreshing,
+      refreshToken: refreshTokenSilently,
+    }),
+    [
+      user,
+      updateUser,
+      oauthLogin,
+      handleGoogleOAuth,
+      logout,
+      loading,
+      refreshing,
+      refreshTokenSilently,
+    ]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

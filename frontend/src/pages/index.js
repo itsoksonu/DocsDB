@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { useAuth } from "../contexts/AuthContext";
@@ -76,7 +76,7 @@ export default function Home() {
     { id: "other", name: "Other" },
   ];
 
-  const loadDocuments = async () => {
+  const loadDocuments = useCallback(async () => {
     // If we're on "for-you" and user is not logged in, we are fetching trending
     // which has a slightly different cache key structure potentially
     const isTrending = selectedCategory === "for-you" && !user;
@@ -130,11 +130,12 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCategory, user]);
 
+  // loadDocuments' own deps are exactly the two values this effect used to list.
   useEffect(() => {
     loadDocuments();
-  }, [selectedCategory, user]);
+  }, [loadDocuments]);
 
   const handleSearch = (query) => {
     const trimmed = query.trim();
@@ -380,7 +381,7 @@ export default function Home() {
         <section className="py-16 bg-dark-950">
           <div className="max-w-4xl mx-auto px-6 text-center">
             <p className="text-sm text-dark-400 uppercase tracking-wider mb-4">
-              IT'S A DOCUMENT REPOSITORY, BUT BETTER
+              IT&apos;S A DOCUMENT REPOSITORY, BUT BETTER
             </p>
             <h2
               className="font-literature text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-white"

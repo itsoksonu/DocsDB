@@ -1,5 +1,4 @@
 import Queue from "bull";
-import Redis from "ioredis";
 import Document from "../models/Document.js";
 import { processDocument } from "../utils/documentProcessor.js";
 import { embedDocumentPassages } from "../utils/documentIndex.js";
@@ -21,8 +20,14 @@ export const processDocumentQueue = new Queue(
   redisConfig
 );
 
+// Without a timeout a wedged Tesseract or pdf.js call holds its worker slot
+// forever; Bull only notices via stall detection, which the lock keeps renewing
+// while the call is still technically running.
+const JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
 export const PROCESS_JOB_OPTIONS = {
   attempts: 3,
+  timeout: JOB_TIMEOUT_MS,
   backoff: {
     type: "exponential",
     delay: 5000,
@@ -60,6 +65,7 @@ export function enqueueProcessing(documentId, s3Key) {
  */
 export const EMBED_JOB_OPTIONS = {
   attempts: 20,
+  timeout: JOB_TIMEOUT_MS,
   backoff: {
     type: "fixed",
     delay: 60 * 1000,
@@ -90,6 +96,7 @@ export function enqueueEmbedding(documentId) {
  */
 export const OCR_JOB_OPTIONS = {
   attempts: 40,
+  timeout: JOB_TIMEOUT_MS,
   backoff: {
     type: "fixed",
     delay: 5000,
@@ -105,6 +112,22 @@ export function enqueueOcr(documentId) {
     { ...OCR_JOB_OPTIONS, jobId: `ocr-${documentId}` }
   );
 }
+
+/**
+ * Scheduled and manual document fetching.
+ *
+ * Unlike the job types above, the result of a fetch job is polled by
+ * GET /admin/fetch-docs/:jobId, so the record has to outlive completion - but
+ * not forever. It used to be enqueued with only a jobId, which meant a daily
+ * cron over five categories retained a large job record per category per run,
+ * indefinitely.
+ */
+export const FETCH_JOB_OPTIONS = {
+  attempts: 1,
+  timeout: 30 * 60 * 1000,
+  removeOnComplete: { age: 24 * 60 * 60, count: 100 },
+  removeOnFail: { age: 24 * 60 * 60, count: 100 },
+};
 
 processDocumentQueue.process("process-document", async (job) => {
   const { documentId, s3Key } = job.data;
@@ -288,23 +311,23 @@ processDocumentQueue.process("fetch-documents", async (job) => {
 
 // Event handlers
 processDocumentQueue.on("completed", (job, result) => {
-  logger.info(`Job ${job.id} completed for document ${result.documentId}`);
+  logger.info(`Job ${job?.id} completed for document ${result?.documentId}`);
 });
 
 processDocumentQueue.on("failed", (job, error) => {
-  // An embedding or OCR pass that stopped at its budget is progress, not a
-  // fault, and it retries on its own - logging it as an error would cry wolf
-  // every minute for a job that is working correctly.
+  // Defensive optional chaining: every job type here sets removeOnFail, so Bull
+  // can emit this with a partially-collected job. A throw inside an EventEmitter
+  // handler is an uncaught exception, which would take the process down.
   const isPausedPass =
-    (job.name === "embed-document" || job.name === "ocr-document") &&
-    job.attemptsMade < job.opts.attempts;
+    (job?.name === "embed-document" || job?.name === "ocr-document") &&
+    job?.attemptsMade < (job?.opts?.attempts ?? 0);
 
   if (isPausedPass) {
-    logger.info(error.message);
+    logger.info(error?.message);
     return;
   }
 
-  logger.error(`Job ${job.id} failed:`, error);
+  logger.error(`Job ${job?.id} failed:`, error);
 });
 
 processDocumentQueue.on("stalled", (job) => {

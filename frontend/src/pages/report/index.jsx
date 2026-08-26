@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
+import Link from "next/link";
 import { DesktopNavbar } from "../../components/layout/DesktopNavbar";
 import Footer from "../../components/layout/Footer";
 import { useAuth } from "../../contexts/AuthContext";
@@ -102,13 +103,13 @@ const ReportCenter = () => {
                   <span className="font-medium">Report a Bug / Issue</span>
                   <ChevronRight size={16} />
                 </button>
-                <a
+                <Link
                   href="/dmca"
                   className="w-full text-left px-4 py-3 rounded-lg flex items-center justify-between transition-colors hover:bg-dark-800 text-dark-300"
                 >
                   <span className="font-medium">Copyright / DMCA</span>
                   <ChevronRight size={16} />
-                </a>
+                </Link>
               </div>
 
               {/* Main Content */}
@@ -134,7 +135,7 @@ const ReportCenter = () => {
                             <span className="inline-block px-1.5 py-0.5 bg-dark-700 rounded text-xs mx-1">
                               ...
                             </span>{" "}
-                            menu &rarr; Select "Report"
+                            menu &rarr; Select &ldquo;Report&rdquo;
                           </div>
                         </div>
                       </div>

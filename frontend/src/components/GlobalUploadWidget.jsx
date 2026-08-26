@@ -1,5 +1,5 @@
 import { io } from "socket.io-client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/router";
 import {
   FileText,
@@ -25,7 +25,10 @@ export default function GlobalUploadWidget() {
     uploadsRef.current = uploads;
   }, [uploads]);
 
-  const handleProgressUpdate = (data) => {
+  // Stable: reads uploads through the ref, and updateUpload is itself memoized
+  // in UploadContext. Both matter because this is named in the socket effect's
+  // dependency array below, which must not re-run on every render.
+  const handleProgressUpdate = useCallback((data) => {
     const current = uploadsRef.current;
     const upload = data.documentId
       ? current.find((u) => u.documentId === data.documentId)
@@ -42,7 +45,7 @@ export default function GlobalUploadWidget() {
     } else if (data.step) {
       updateUpload(upload.id, { processingStep: data.step });
     }
-  };
+  }, [updateUpload]);
 
   // Compute processing doc IDs for effect dependency
   const processingDocIds = uploads
@@ -55,7 +58,19 @@ export default function GlobalUploadWidget() {
     const processingUploads = uploadsRef.current.filter(
       (u) => u.status === "processing" && u.documentId
     );
-    if (processingUploads.length === 0) return;
+
+    // Nothing left to watch. This component is mounted in _app and never
+    // unmounts, so the unmount cleanup below never runs - without closing the
+    // socket here it stays open for the rest of the session and joinedRooms
+    // grows unbounded.
+    if (processingUploads.length === 0) {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      joinedRoomsRef.current.clear();
+      return;
+    }
 
     // Setup socket if not yet connected
     if (!socketRef.current) {
@@ -95,37 +110,44 @@ export default function GlobalUploadWidget() {
       const current = uploadsRef.current.filter(
         (u) => u.status === "processing" && u.documentId
       );
-      for (const u of current) {
-        try {
-          const response = await apiService.getUploadStatus(u.documentId);
-          const { status, processingError } =
-            response.data.data || response.data;
-          if (status === "processed") {
-            handleProgressUpdate({ documentId: u.documentId, completed: true });
-          } else if (status === "duplicate") {
-            // Not a failure: the user already had this exact file, so there is
-            // nothing to retry and nothing went wrong.
-            updateUpload(u.id, {
-              status: "duplicate",
-              progress: 100,
-              errorMessage: "",
-            });
-          } else if (status === "failed") {
-            updateUpload(u.id, {
-              status: "error",
-              errorMessage: processingError || "Processing failed",
-            });
+      // In parallel: this is only the fallback for the socket, and a serial loop
+      // meant N round-trips per tick.
+      await Promise.all(
+        current.map(async (u) => {
+          try {
+            const response = await apiService.getUploadStatus(u.documentId);
+            const { status, processingError } =
+              response.data.data || response.data;
+            if (status === "processed") {
+              handleProgressUpdate({
+                documentId: u.documentId,
+                completed: true,
+              });
+            } else if (status === "duplicate") {
+              // Not a failure: the user already had this exact file, so there is
+              // nothing to retry and nothing went wrong.
+              updateUpload(u.id, {
+                status: "duplicate",
+                progress: 100,
+                errorMessage: "",
+              });
+            } else if (status === "failed") {
+              updateUpload(u.id, {
+                status: "error",
+                errorMessage: processingError || "Processing failed",
+              });
+            }
+          } catch (err) {
+            console.error("Status check failed:", err);
           }
-        } catch (err) {
-          console.error("Status check failed:", err);
-        }
-      }
+        })
+      );
     };
 
     checkStatuses();
     const pollInterval = setInterval(checkStatuses, 2000);
     return () => clearInterval(pollInterval);
-  }, [processingDocIds]);
+  }, [processingDocIds, handleProgressUpdate, updateUpload]);
 
   // Redirect when all uploads are done
   useEffect(() => {
@@ -137,17 +159,22 @@ export default function GlobalUploadWidget() {
         u.status === "error"
     );
     const anySuccess = uploads.some((u) => u.status === "processed");
-    if (allDone && anySuccess) {
-      setTimeout(() => {
-        if (socketRef.current) {
-          socketRef.current.disconnect();
-          socketRef.current = null;
-        }
-        resetUploads();
-        router.push("/profile?tab=uploaded");
-      }, 2000);
-    }
-  }, [uploads]);
+    if (!allDone || !anySuccess) return;
+
+    // This effect depends on `uploads`, so without the cleanup every subsequent
+    // change queued another timer - resetUploads() and router.push() fired
+    // repeatedly, and could fire after navigating away.
+    const timer = setTimeout(() => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      resetUploads();
+      router.push("/profile?tab=uploaded");
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [uploads, resetUploads, router]);
 
   // Cleanup socket on unmount
   useEffect(() => {

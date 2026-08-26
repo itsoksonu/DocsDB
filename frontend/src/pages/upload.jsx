@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import Head from "next/head";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { useAuth } from "../contexts/AuthContext";
 import { useUpload } from "../contexts/UploadContext";
@@ -327,12 +328,12 @@ export default function UploadPage() {
             {/* Terms Agreement */}
             <p className="mt-4 text-center text-sm text-dark-400">
               By uploading, you agree to our{" "}
-              <a
+              <Link
                 href="/terms"
                 className="text-blue-500 hover:text-blue-400 underline"
               >
                 DocsDB Upload Terms and Agreement
-              </a>
+              </Link>
               .
             </p>
 
@@ -345,7 +346,7 @@ export default function UploadPage() {
                 create a work yourself and are unsure whether it is copyrighted,
                 please do not upload it. DocsDB expeditiously removes infringing
                 material and terminates repeat infringers pursuant to our
-                "three-strikes" policy.
+                &ldquo;three-strikes&rdquo; policy.
               </p>
             </div>
 

@@ -93,6 +93,7 @@ router.post(
 router.post(
   "/complete",
   authMiddleware,
+  rateLimitMiddleware("upload"),
   [body("documentId").isMongoId(), body("key").notEmpty()],
   async (req, res, next) => {
     try {
@@ -124,6 +125,17 @@ router.post(
         return res.status(400).json({
           success: false,
           message: "Invalid document key",
+        });
+      }
+
+      // Confirm the object is really in the bucket before enqueueing. This route
+      // used to flip the document to "processing" and queue a worker on the
+      // client's word alone, which is a free queue-flooding primitive and leaves
+      // documents stuck when a presigned PUT silently failed.
+      if (!(await S3Manager.objectExists(key))) {
+        return res.status(400).json({
+          success: false,
+          message: "Upload not found in storage. Please retry the upload.",
         });
       }
 

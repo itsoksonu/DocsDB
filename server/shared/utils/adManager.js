@@ -9,8 +9,12 @@ const CACHE_TTL = 300; // 5 minutes
 
 export async function getSponsoredDocuments(limit = 10) {
   try {
+    // limit belongs in the key: a single shared key meant a call with a larger
+    // limit silently received whatever smaller slice was cached first.
+    const cacheKey = `${SPONSORED_CACHE_KEY}:${limit}`;
+
     if (getRedis()) {
-      const cached = await getRedis().get(SPONSORED_CACHE_KEY);
+      const cached = await getRedis().get(cacheKey);
       if (cached) {
         return JSON.parse(cached).slice(0, limit);
       }
@@ -26,10 +30,13 @@ export async function getSponsoredDocuments(limit = 10) {
     .select('-metadata -embeddingsId')
     .populate('userId', 'name')
     .sort({ 'metadata.sponsorPriority': -1, createdAt: -1 })
-    .limit(limit * 2); // Get more for variety
+    .limit(limit * 2) // Get more for variety
+    // .lean(): the result is only ever JSON.stringify'd into Redis and sliced,
+    // so hydrating full Mongoose documents (with change tracking) is pure waste.
+    .lean();
 
     if (getRedis() && sponsoredDocs.length > 0) {
-      await getRedis().setEx(SPONSORED_CACHE_KEY, CACHE_TTL, JSON.stringify(sponsoredDocs));
+      await getRedis().setEx(cacheKey, CACHE_TTL, JSON.stringify(sponsoredDocs));
     }
 
     return sponsoredDocs.slice(0, limit);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
 import {
   FileText,
@@ -45,13 +45,10 @@ export const DocumentCard = ({ document, onUpdate }) => {
   const [showCollectionModal, setShowCollectionModal] = useState(false);
   const [savedCollectionId, setSavedCollectionId] = useState(null);
 
-  useEffect(() => {
-    if (isDropdownOpen && !hasCheckedStatus) {
-      checkSavedStatus();
-    }
-  }, [isDropdownOpen, hasCheckedStatus]);
-
-  const checkSavedStatus = async () => {
+  // Keyed on the document id, not the document object: the parent re-creates
+  // that object on every fetch, which would otherwise change this callback's
+  // identity on each render.
+  const checkSavedStatus = useCallback(async () => {
     try {
       const response = await apiService.checkSavedStatus(document._id);
       setIsSaved(response.data.isSaved);
@@ -60,7 +57,13 @@ export const DocumentCard = ({ document, onUpdate }) => {
     } catch (error) {
       console.error("Error checking save status:", error);
     }
-  };
+  }, [document._id]);
+
+  useEffect(() => {
+    if (isDropdownOpen && !hasCheckedStatus) {
+      checkSavedStatus();
+    }
+  }, [isDropdownOpen, hasCheckedStatus, checkSavedStatus]);
 
   // Slug when the document has one, id for anything not yet backfilled.
   const documentHref = document.slug || document._id;
@@ -172,7 +175,7 @@ export const DocumentCard = ({ document, onUpdate }) => {
         `/documents/${document._id}/view`,
       );
       const viewUrl = response.data.data.viewUrl;
-      window.open(viewUrl, "_blank");
+      window.open(viewUrl, "_blank", "noopener,noreferrer");
 
       // Track download
       await apiService.trackDownload(document._id);

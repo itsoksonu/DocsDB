@@ -6,13 +6,10 @@ import { rateLimitMiddleware } from '../middleware/rateLimit.js';
 import User from '../../shared/models/User.js';
 import UserWallet from '../../shared/models/UserWallet.js';
 import Document from '../../shared/models/Document.js';
-import Earnings from '../../shared/models/Earnings.js';
 import Payouts from '../../shared/models/Payouts.js';
-import { 
-  calculateEarnings, 
-  trackMonetizationEvent,
+import {
   processPayout,
-  getEarningsSummary 
+  getEarningsSummary
 } from '../../shared/utils/monetizationEngine.js';
 import { stripe } from '../../shared/integrations/stripe.js';
 import logger from '../../shared/utils/logger.js';
@@ -106,6 +103,7 @@ router.get('/payouts',
 // Request payout
 router.post('/payouts/request',
   authMiddleware,
+  rateLimitMiddleware('write'),
   [
     body('amount').isFloat({ min: 50, max: 10000 }).withMessage('Amount must be between $50 and $10,000')
   ],
@@ -260,6 +258,7 @@ router.patch('/settings',
 // Stripe Connect onboarding
 router.post('/onboarding',
   authMiddleware,
+  rateLimitMiddleware('write'),
   async (req, res, next) => {
     try {
       const userId = req.user.userId;
@@ -272,39 +271,55 @@ router.post('/onboarding',
         });
       }
 
-      const account = await stripe.accounts.create({
-        type: 'express',
-        country: 'US',
-        email: user.email,
-        capabilities: {
-          transfers: { requested: true },
-        },
-        metadata: {
-          userId: userId.toString()
-        }
-      });
+      // Reuse an existing connected account. Creating one unconditionally meant
+      // every call minted a new Stripe Express account and repointed payouts at
+      // it - orphaning the old (possibly already-verified) account, and letting a
+      // caller create unlimited accounts by repeating the request.
+      const existingWallet = await UserWallet.findOne({ userId })
+        .select('payoutDetails.stripeAccountId')
+        .lean();
 
+      let accountId = existingWallet?.payoutDetails?.stripeAccountId;
+
+      if (!accountId) {
+        const account = await stripe.accounts.create({
+          type: 'express',
+          country: 'US',
+          email: user.email,
+          capabilities: {
+            transfers: { requested: true },
+          },
+          metadata: {
+            userId: userId.toString()
+          }
+        });
+
+        accountId = account.id;
+
+        await UserWallet.updateOne(
+          { userId },
+          {
+            $set: { 'payoutDetails.stripeAccountId': accountId },
+            $setOnInsert: { userId }
+          },
+          { upsert: true }
+        );
+      }
+
+      // Account links are single-use and short-lived, so this is regenerated on
+      // every call even when the account already exists.
       const accountLink = await stripe.accountLinks.create({
-        account: account.id,
+        account: accountId,
         refresh_url: `${process.env.FRONTEND_URL}/monetization/onboarding/refresh`,
         return_url: `${process.env.FRONTEND_URL}/monetization/onboarding/success`,
         type: 'account_onboarding',
       });
 
-      await UserWallet.updateOne(
-        { userId },
-        {
-          $set: { 'payoutDetails.stripeAccountId': account.id },
-          $setOnInsert: { userId }
-        },
-        { upsert: true }
-      );
-
       res.json({
         success: true,
         data: {
           onboardingUrl: accountLink.url,
-          stripeAccountId: account.id
+          stripeAccountId: accountId
         }
       });
 
@@ -423,22 +438,22 @@ router.post('/admin/payouts/:payoutId/process',
 
       const { payoutId } = req.params;
 
-      const payout = await Payouts.findById(payoutId);
-      if (!payout) {
+      const existing = await Payouts.findById(payoutId);
+      if (!existing) {
         return res.status(404).json({
           success: false,
           message: 'Payout not found'
         });
       }
 
-      if (payout.status !== 'pending') {
+      if (existing.status !== 'pending') {
         return res.status(400).json({
           success: false,
           message: 'Payout already processed'
         });
       }
 
-      const wallet = await UserWallet.findOne({ userId: payout.userId }).lean();
+      const wallet = await UserWallet.findOne({ userId: existing.userId }).lean();
       const stripeAccountId = wallet?.payoutDetails?.stripeAccountId;
 
       if (!stripeAccountId) {
@@ -448,18 +463,37 @@ router.post('/admin/payouts/:payoutId/process',
         });
       }
 
-      try {
-        const transfer = await stripe.transfers.create({
-          amount: Math.round(payout.amount * 100), // Convert to cents
-          currency: 'usd',
-          destination: stripeAccountId,
-          metadata: {
-            payoutId: payout._id.toString(),
-            userId: payout.userId.toString()
-          }
-        });
+      // Claim the payout atomically before touching Stripe. Checking the status
+      // and then creating the transfer as two steps lets two concurrent requests
+      // both see 'pending' and both send real money.
+      const payout = await Payouts.findOneAndUpdate(
+        { _id: payoutId, status: 'pending' },
+        { $set: { status: 'processing' } },
+        { new: true }
+      );
 
-        payout.status = 'processing';
+      if (!payout) {
+        return res.status(409).json({
+          success: false,
+          message: 'Payout is already being processed'
+        });
+      }
+
+      try {
+        const transfer = await stripe.transfers.create(
+          {
+            amount: Math.round(payout.amount * 100), // Convert to cents
+            currency: 'usd',
+            destination: stripeAccountId,
+            metadata: {
+              payoutId: payout._id.toString(),
+              userId: payout.userId.toString()
+            }
+          },
+          // Guards against a retried request creating a second transfer.
+          { idempotencyKey: `payout_${payout._id.toString()}` }
+        );
+
         payout.transactionId = transfer.id;
         await payout.save();
 

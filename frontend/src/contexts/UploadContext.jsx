@@ -1,4 +1,10 @@
-import { createContext, useContext, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 import toast from "react-hot-toast";
 import { apiService } from "../services/api";
 
@@ -28,7 +34,13 @@ export const UploadProvider = ({ children }) => {
   const [uploads, setUploads] = useState([]);
   const [isMinimized, setIsMinimized] = useState(false);
 
-  const addFiles = (files) => {
+  // Every handler below is wrapped so its identity is stable. That matters for
+  // more than render count: GlobalUploadWidget lists updateUpload and
+  // resetUploads in effect dependency arrays, and with a fresh function on each
+  // render those effects would tear down and rebuild the socket on every render.
+  // All the state updates use the functional form of setState, so most of these
+  // need no dependencies at all.
+  const addFiles = useCallback((files) => {
     const newUploads = Array.from(files).map((file) => ({
       id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file,
@@ -43,24 +55,24 @@ export const UploadProvider = ({ children }) => {
       retrying: false,
     }));
     setUploads((prev) => [...prev, ...newUploads]);
-  };
+  }, []);
 
-  const updateUpload = (id, updates) => {
+  const updateUpload = useCallback((id, updates) => {
     setUploads((prev) =>
       prev.map((u) => (u.id === id ? { ...u, ...updates } : u))
     );
-  };
+  }, []);
 
-  const removeUpload = (id) => {
+  const removeUpload = useCallback((id) => {
     setUploads((prev) => prev.filter((u) => u.id !== id));
-  };
+  }, []);
 
-  const resetUploads = () => {
+  const resetUploads = useCallback(() => {
     setUploads([]);
     setIsMinimized(false);
-  };
+  }, []);
 
-  const uploadFile = async (uploadItem) => {
+  const uploadFile = useCallback(async (uploadItem) => {
     const { id, file } = uploadItem;
     updateUpload(id, {
       status: "uploading",
@@ -94,14 +106,14 @@ export const UploadProvider = ({ children }) => {
       updateUpload(id, { status: "error", errorMessage: message });
       toast.error(error.response?.data?.message || `${file.name} failed to upload`);
     }
-  };
+  }, [updateUpload]);
 
   /**
    * Retrying a failed item never re-uploads a file that is already in S3.
    * If the bytes made it, we only ask the server to run the pipeline again;
    * a fresh upload would orphan the first Document row and its S3 object.
    */
-  const retryUpload = async (id) => {
+  const retryUpload = useCallback(async (id) => {
     const item = uploads.find((u) => u.id === id);
     if (!item || item.status !== "error" || item.retrying) return;
 
@@ -127,30 +139,43 @@ export const UploadProvider = ({ children }) => {
       updateUpload(id, { errorMessage: message, retrying: false });
       toast.error(message);
     }
-  };
+  }, [uploads, uploadFile, updateUpload]);
 
-  const retryAllFailed = async () => {
+  const retryAllFailed = useCallback(async () => {
     const failed = uploads.filter((u) => u.status === "error" && !u.retrying);
     await Promise.all(failed.map((u) => retryUpload(u.id)));
-  };
+  }, [uploads, retryUpload]);
+
+  // Memoized so consumers re-render when the upload list actually changes,
+  // rather than on every render of whatever sits above this provider.
+  const value = useMemo(
+    () => ({
+      uploads,
+      isMinimized,
+      setIsMinimized,
+      addFiles,
+      updateUpload,
+      removeUpload,
+      resetUploads,
+      uploadFile,
+      retryUpload,
+      retryAllFailed,
+    }),
+    [
+      uploads,
+      isMinimized,
+      addFiles,
+      updateUpload,
+      removeUpload,
+      resetUploads,
+      uploadFile,
+      retryUpload,
+      retryAllFailed,
+    ]
+  );
 
   return (
-    <UploadContext.Provider
-      value={{
-        uploads,
-        isMinimized,
-        setIsMinimized,
-        addFiles,
-        updateUpload,
-        removeUpload,
-        resetUploads,
-        uploadFile,
-        retryUpload,
-        retryAllFailed,
-      }}
-    >
-      {children}
-    </UploadContext.Provider>
+    <UploadContext.Provider value={value}>{children}</UploadContext.Provider>
   );
 };
 
