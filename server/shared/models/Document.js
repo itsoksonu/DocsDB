@@ -88,6 +88,13 @@ const documentSchema = new mongoose.Schema({
       // away and rebuilt rather than read wrongly - the passages are derived
       // from the file, so rebuilding costs nothing but the work.
       format: Number,
+      // Present only for scanned documents, whose passages come from OCR
+      // instead of a text layer. Written per page so a run that is interrupted
+      // resumes at the next page rather than starting the book again.
+      ocr: {
+        pagesDone: Number,
+        totalPages: Number,
+      },
     },
     visibility: {
       type: String,

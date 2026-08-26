@@ -112,6 +112,18 @@ const MARKDOWN_COMPONENTS = {
 function coverageNotice(meta) {
   if (!meta) return null;
 
+  if (meta.ocr) {
+    const { pagesDone, pagesTarget } = meta.ocr;
+
+    if (!pagesDone) {
+      return "This document is scanned, so its pages are being read now. Answers will improve as that progresses.";
+    }
+
+    return `Reading this scanned document${
+      pagesTarget ? ` - page ${pagesDone} of ${pagesTarget}` : ""
+    }. Answers currently cover the pages read so far.`;
+  }
+
   if (meta.indexing) {
     return `Still indexing this document (${meta.remaining} passages to go). Until that finishes, answers cover its opening section only.`;
   }
@@ -226,10 +238,14 @@ export const AskAiPanel = ({ document: doc, isLoggedIn }) => {
     apiService
       .prepareDocumentAi(documentKey)
       .then((response) => {
-        const { ready, remaining, mode } = response.data || {};
-        // A long document on a rate-limited tier cannot be indexed in one pass.
-        // Saying so beats letting the answers look inexplicably shallow.
-        if (!ready && remaining > 0) {
+        const { ready, remaining, mode, ocr } = response.data || {};
+        if (ready) return;
+
+        // A scan being read, or a long document still being indexed. Saying so
+        // beats letting the answers look inexplicably shallow.
+        if (ocr) {
+          setMeta({ mode, ocr });
+        } else if (remaining > 0) {
           setMeta({ mode, indexing: true, remaining });
         }
       })
@@ -299,15 +315,23 @@ export const AskAiPanel = ({ document: doc, isLoggedIn }) => {
           question: trimmed,
           history,
           signal: controller.signal,
-          // An answer from the opening section while indexing is still running
-          // keeps the "still indexing" wording rather than reverting to the
-          // flat "could not be indexed".
+          // Progress wording survives an answer. A scan half-read, or a long
+          // document half-indexed, still only covers part of itself - and the
+          // stream's own meta knows nothing about that.
           onMeta: (received) =>
-            setMeta((current) =>
-              received.mode === "opening" && current?.indexing
-                ? { ...received, indexing: true, remaining: current.remaining }
-                : received,
-            ),
+            setMeta((current) => {
+              if (current?.ocr) return { ...received, ocr: current.ocr };
+
+              if (current?.indexing && received.mode === "opening") {
+                return {
+                  ...received,
+                  indexing: true,
+                  remaining: current.remaining,
+                };
+              }
+
+              return received;
+            }),
           onSources: (sources) => updateAnswer(() => ({ sources })),
           onToken: (token) =>
             updateAnswer((target) => ({ content: target.content + token })),

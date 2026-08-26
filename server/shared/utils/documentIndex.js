@@ -79,7 +79,7 @@ const SNIPPET_CHARS = 400;
 // older format is dropped and rebuilt on the next question instead of being
 // read wrongly: 1 stored vectors as BSON arrays of doubles, 2 as Float32
 // binary.
-const INDEX_FORMAT = 2;
+export const INDEX_FORMAT = 2;
 
 // Repeat questions are common - the same suggestion clicked twice, a follow-up
 // re-asked - and each was a round trip of the better part of a second to embed
@@ -291,6 +291,15 @@ function writeCache(key, passages) {
     passageCache.delete(oldestKey);
     cachedFloats -= oldest.floats;
   }
+}
+
+/**
+ * Forgets a document's cached passages without touching the stored ones.
+ * The OCR pass calls this as it appends pages, so a question does not keep
+ * being answered from the handful of pages that were cached first.
+ */
+export function dropCachedPassages(documentId) {
+  dropFromCache(documentId);
 }
 
 function dropFromCache(documentId) {
@@ -724,6 +733,13 @@ export async function prepareDocumentIndex(document) {
     // Passages still waiting for a vector. Until this reaches zero, answers
     // come from the document's opening section.
     remaining: ready.remaining,
+    // Present only for scanned documents: how far OCR has read.
+    ocr: ready.aiIndex.ocr
+      ? {
+          pagesDone: ready.aiIndex.ocr.pagesDone || 0,
+          totalPages: ready.aiIndex.ocr.totalPages || 0,
+        }
+      : null,
     cache,
     timings,
   };

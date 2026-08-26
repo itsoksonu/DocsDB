@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import Document from "../models/Document.js";
 import { processDocument } from "../utils/documentProcessor.js";
 import { embedDocumentPassages } from "../utils/documentIndex.js";
+import { ocrDocumentIntoChunks } from "../utils/documentOcr.js";
 import logger from "../utils/logger.js";
 
 const redisConfig = {
@@ -76,6 +77,32 @@ export function enqueueEmbedding(documentId) {
     "embed-document",
     { documentId: String(documentId) },
     { ...EMBED_JOB_OPTIONS, jobId: `embed-${documentId}` }
+  );
+}
+
+/**
+ * Reading a scanned document with OCR, for Ask AI.
+ *
+ * Tesseract takes seconds per page, so each attempt reads what it can inside
+ * its time budget and asks for another turn. The backoff is short because
+ * nothing is being waited on - unlike embedding, there is no quota window to
+ * sit out. Forty passes of a minute covers the page cap comfortably.
+ */
+export const OCR_JOB_OPTIONS = {
+  attempts: 40,
+  backoff: {
+    type: "fixed",
+    delay: 5000,
+  },
+  removeOnComplete: true,
+  removeOnFail: true,
+};
+
+export function enqueueOcr(documentId) {
+  return processDocumentQueue.add(
+    "ocr-document",
+    { documentId: String(documentId) },
+    { ...OCR_JOB_OPTIONS, jobId: `ocr-${documentId}` }
   );
 }
 
@@ -153,6 +180,33 @@ processDocumentQueue.process("process-document", async (job) => {
 
     throw error;
   }
+});
+
+processDocumentQueue.process("ocr-document", async (job) => {
+  const { documentId } = job.data;
+  const maxAttempts = job.opts?.attempts || 1;
+
+  const result = await ocrDocumentIntoChunks(documentId);
+
+  if (!result.complete) {
+    // Same contract as the embedding job: throwing asks for another pass. The
+    // pages read so far are already answerable.
+    throw new Error(
+      `ocr paused for ${documentId}: page ${result.pagesDone} of ` +
+        `${result.totalPages} (pass ${job.attemptsMade + 1}/${maxAttempts})`
+    );
+  }
+
+  logger.info(
+    `OCR finished for document ${documentId}: ${result.pagesDone} pages, ${result.chunkCount} passages`
+  );
+
+  // Now that there is text, it can be made searchable.
+  if (result.chunkCount > 0) {
+    await enqueueEmbedding(documentId);
+  }
+
+  return { success: true, documentId };
 });
 
 processDocumentQueue.process("embed-document", async (job) => {
@@ -238,9 +292,14 @@ processDocumentQueue.on("completed", (job, result) => {
 });
 
 processDocumentQueue.on("failed", (job, error) => {
-  // An embedding pass that stopped at the quota is progress, not a fault, and
-  // it retries on its own - logging it as an error would cry wolf every minute.
-  if (job.name === "embed-document" && job.attemptsMade < job.opts.attempts) {
+  // An embedding or OCR pass that stopped at its budget is progress, not a
+  // fault, and it retries on its own - logging it as an error would cry wolf
+  // every minute for a job that is working correctly.
+  const isPausedPass =
+    (job.name === "embed-document" || job.name === "ocr-document") &&
+    job.attemptsMade < job.opts.attempts;
+
+  if (isPausedPass) {
     logger.info(error.message);
     return;
   }

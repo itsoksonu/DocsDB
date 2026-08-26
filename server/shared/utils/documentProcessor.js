@@ -1333,6 +1333,87 @@ async function extractPDFWithOCR(filePath, maxPages = OCR_MAX_PAGES) {
   }
 }
 
+/**
+ * OCRs a range of pages, reporting each one as it is read.
+ *
+ * extractPDFWithOCR above concatenates the first few pages into one string,
+ * which is what metadata generation wants. Ask AI wants the opposite: each page
+ * separately so a citation can say "Page 41", the ability to start where a
+ * previous run stopped, and the ability to stop on a deadline - OCR is measured
+ * in seconds per page, so no single run may hold the worker for an hour.
+ *
+ * One Tesseract worker for the whole range, and one page image in memory at a
+ * time: reloading the ~15 MB language model per page was the original memory
+ * problem, and rendering the whole document at once was the other.
+ *
+ * @param {Function} onPage awaited for every page, including one that rendered
+ *   nothing - the caller tracks progress by page number, so a page that reports
+ *   nothing would otherwise be retried forever.
+ * @param {Function} shouldStop checked before each page.
+ */
+export async function ocrPdfPages(
+  filePath,
+  { startPage = 1, maxPages = 1, scale = OCR_SCALE, onPage, shouldStop } = {}
+) {
+  if (!OCR_ENABLED) throw new Error("OCR is disabled");
+
+  const fs = await import("fs");
+  const pdfBytes = await fs.promises.readFile(filePath);
+  const totalPages = (await PDFDocument.load(pdfBytes)).getPageCount();
+  const lastPage = Math.min(totalPages, startPage + maxPages - 1);
+
+  if (startPage > lastPage) {
+    return { pagesRead: 0, totalPages, stopped: false };
+  }
+
+  let worker;
+  let pagesRead = 0;
+
+  try {
+    worker = await Tesseract.createWorker("eng");
+
+    for (let page = startPage; page <= lastPage; page++) {
+      if (shouldStop?.()) {
+        return { pagesRead, totalPages, stopped: true };
+      }
+
+      const rendered = await runWithPdfWarningsSuppressed("ask-ocr", () =>
+        pdfToImg(filePath, {
+          pages: [page],
+          imgType: "png",
+          scale,
+          background: "white",
+          ...PDFJS_FONT_OPTS,
+        })
+      );
+
+      const src = Array.isArray(rendered) ? rendered[0] : rendered;
+      let text = "";
+
+      if (src) {
+        const base64 = src.includes(",") ? src.split(",")[1] : src;
+        let buffer = Buffer.from(base64, "base64");
+        const result = await worker.recognize(buffer);
+        buffer = null; // release the page image before the next iteration
+        text = (result.data?.text || "").trim();
+      }
+
+      pagesRead++;
+      await onPage?.({ page, text, totalPages });
+    }
+
+    return { pagesRead, totalPages, stopped: false };
+  } finally {
+    if (worker) {
+      try {
+        await worker.terminate();
+      } catch (error) {
+        logger.warn(`Failed to terminate Tesseract worker: ${error.message}`);
+      }
+    }
+  }
+}
+
 async function extractFromDOCX(filePath) {
   try {
     const result = await mammoth.extractRawText({ path: filePath });

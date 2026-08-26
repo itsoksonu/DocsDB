@@ -9,7 +9,12 @@ import UserCollection from "../../shared/models/UserCollection.js";
 import {
   enqueueProcessing,
   enqueueEmbedding,
+  enqueueOcr,
 } from "../../shared/queues/processQueue.js";
+import {
+  isOcrCandidate,
+  ocrProgress,
+} from "../../shared/utils/documentOcr.js";
 import { looksLikeObjectId } from "../../shared/utils/slug.js";
 import { releaseStoredFile } from "../../shared/utils/storage.js";
 import {
@@ -726,12 +731,42 @@ router.post(
       const prepared = await prepareDocumentIndex(document);
 
       if (!prepared) {
+        // A scan has no text layer, which is not the same as having no content.
+        // OCR reads it page by page in the background; the panel says so rather
+        // than claiming the document cannot be answered about.
+        if (isOcrCandidate(document)) {
+          await enqueueOcr(document._id);
+
+          return res.json({
+            success: true,
+            data: {
+              ready: false,
+              mode: "ocr",
+              ocr: { pagesDone: 0, totalPages: null },
+            },
+          });
+        }
+
         // Told now rather than after the user has typed a question and waited.
         return res.status(422).json({
           success: false,
           message:
             "This document has no readable text, so AI cannot answer questions about it.",
         });
+      }
+
+      // A scan that OCR has not finished reading. Re-queued because a restart
+      // mid-book would otherwise leave it half-read forever; the stable job id
+      // makes this a no-op while the job is alive.
+      const ocr = ocrProgress(prepared.ocr ? { ocr: prepared.ocr } : null);
+      const ocrInProgress = Boolean(ocr && !ocr.complete);
+
+      if (ocrInProgress) {
+        try {
+          await enqueueOcr(document._id);
+        } catch (error) {
+          logger.error(`Ask AI: could not queue OCR for ${document._id}:`, error);
+        }
       }
 
       // Passages still without a vector become a queued job rather than work
@@ -764,12 +799,15 @@ router.post(
       res.json({
         success: true,
         data: {
-          // False while passages are still being embedded: questions are
-          // answerable, but from the document's opening section only.
-          ready: prepared.remaining === 0,
+          // False while passages are still being embedded or read: questions
+          // are answerable, but from a part of the document only.
+          ready: prepared.remaining === 0 && !ocrInProgress,
           mode: prepared.mode,
           truncated: prepared.truncated,
           remaining: prepared.remaining,
+          // Only while it is still reading - a finished scan is just a
+          // document, and its uncovered tail is reported as truncation.
+          ocr: ocrInProgress ? ocr : null,
         },
       });
     } catch (error) {
@@ -864,8 +902,26 @@ router.post(
       }
 
       if (!context) {
-        // Scanned images, an empty spreadsheet, a deck of pictures. The
-        // pipeline can OCR these; a request cannot wait that long.
+        // A scan has no text layer. OCR reads it in the background - queued
+        // here too, because a question is as good a signal as a panel open.
+        if (isOcrCandidate(document)) {
+          try {
+            await enqueueOcr(document._id);
+          } catch (error) {
+            logger.error(
+              `Ask AI: could not queue OCR for ${document._id}:`,
+              error,
+            );
+          }
+
+          return res.status(422).json({
+            success: false,
+            message:
+              "This document is scanned, so its pages are being read now. Try again in a moment.",
+          });
+        }
+
+        // An empty spreadsheet, a deck of nothing but pictures.
         return res.status(422).json({
           success: false,
           message:
