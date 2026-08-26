@@ -106,6 +106,13 @@ class APIService {
 
         const message = error.response?.data?.message || "Something went wrong";
 
+        // Background requests the user did not initiate report their own
+        // failures where they are relevant, instead of interrupting with a
+        // toast about something nobody asked for.
+        if (originalRequest?.silent) {
+          return Promise.reject(error);
+        }
+
         // Don't show toast for 401 errors or refresh failures
         if (error.response?.status >= 500) {
           toast.error("Server error. Please try again later.");
@@ -212,6 +219,123 @@ class APIService {
       `/documents/${documentId}/reprocess`
     );
     return response.data;
+  }
+
+  // Warms a document's retrieval index so the first question is not the one
+  // that pays for building it. Called when the Ask AI panel is opened.
+  async prepareDocumentAi(identifier) {
+    const response = await this.client.post(
+      `/documents/${identifier}/ask/prepare`,
+      null,
+      // Opening the panel is not an action whose failure deserves a toast.
+      { silent: true },
+    );
+    return response.data;
+  }
+
+  // Ask AI about a document. Streamed as Server-Sent Events, so this goes
+  // through fetch rather than the axios client: XHR buffers the whole response
+  // and would hand back the answer only once it is complete.
+  //
+  // The axios interceptors don't apply either, so the 401 refresh dance is
+  // repeated here - once, reusing the same refresh call.
+  async askDocumentAi(
+    identifier,
+    {
+      question,
+      history = [],
+      signal,
+      onToken,
+      onMeta,
+      onProvider,
+      onSources,
+      onDone,
+    } = {},
+  ) {
+    const url = `${API_BASE_URL}/documents/${identifier}/ask`;
+
+    const send = (token) =>
+      fetch(url, {
+        method: "POST",
+        credentials: "include",
+        signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ question, history }),
+      });
+
+    let response = await send(localStorage.getItem("accessToken"));
+
+    if (response.status === 401) {
+      const refreshed = await this.refreshToken();
+      const accessToken =
+        refreshed?.data?.accessToken || refreshed?.accessToken;
+
+      if (!accessToken) throw new Error("Your session has expired");
+
+      localStorage.setItem("accessToken", accessToken);
+      response = await send(accessToken);
+    }
+
+    if (!response.ok) {
+      // Every pre-stream failure is ordinary JSON, so the real reason (no
+      // readable text, rate limited, no permission) reaches the user.
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.message || "Something went wrong");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamError = null;
+
+    const handleEvent = (block) => {
+      const lines = block.split("\n");
+      const event = lines
+        .find((line) => line.startsWith("event:"))
+        ?.slice(6)
+        .trim();
+      const raw = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+
+      if (!event || !raw) return;
+
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return;
+      }
+
+      if (event === "token") onToken?.(data.text);
+      else if (event === "meta") onMeta?.(data);
+      else if (event === "sources") onSources?.(data.sources);
+      else if (event === "provider") onProvider?.(data.provider);
+      else if (event === "done") onDone?.(data);
+      else if (event === "error") streamError = new Error(data.message);
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Events are separated by a blank line; a partial one stays buffered.
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() || "";
+        blocks.forEach(handleEvent);
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+
+    if (streamError) throw streamError;
   }
 
   // Feed endpoints

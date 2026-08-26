@@ -4,7 +4,15 @@ import { useRouter } from "next/router";
 import { useAuth } from "../../contexts/AuthContext";
 import { Dropdown, DropdownItem } from "../ui/Dropdown";
 import { SearchBar } from "../ui/SearchBar";
-import { Upload, User, LogOut, HelpCircle, Flag, Bookmark } from "../../icons";
+import {
+  Upload,
+  User,
+  LogOut,
+  HelpCircle,
+  Flag,
+  Bookmark,
+  Shield,
+} from "../../icons";
 import toast from "react-hot-toast";
 import { useGoogleAuth } from "../../hooks/useGoogleAuth";
 
@@ -147,6 +155,11 @@ export const DesktopNavbar = ({
     setIsProfileDropdownOpen(false);
   };
 
+  const navigateToAdmin = () => {
+    router.push("/admin");
+    setIsProfileDropdownOpen(false);
+  };
+
   const handleProfileDropdownToggle = () => {
     setIsProfileDropdownOpen(!isProfileDropdownOpen);
   };
@@ -279,6 +292,19 @@ export const DesktopNavbar = ({
                   label="Report"
                   onClick={navigateToReport}
                 />
+
+                {/* Hiding this from non-admins is convenience, not security.
+                    The gate is server-side: every /admin API route sits behind
+                    requireRole(["admin"]), and AdminLayout redirects anyone who
+                    reaches the page without the role. `role` comes from
+                    /auth/me, so it cannot be set by the client. */}
+                {user.role === "admin" && (
+                  <DropdownItem
+                    icon={Shield}
+                    label="Admin Panel"
+                    onClick={navigateToAdmin}
+                  />
+                )}
 
                 <div className="h-px bg-dark-600 my-2" />
 

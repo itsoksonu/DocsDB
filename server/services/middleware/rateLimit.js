@@ -43,6 +43,24 @@ const rateLimitConfigs = {
     max: int("RL_DOWNLOAD_MAX", 60),
     message: "Download rate limit reached, please slow down.",
   },
+  // Every request here costs an AI provider call, so this is far tighter than
+  // the other tiers. Authenticated-only, so the key is always a user id.
+  ai: {
+    name: "ai",
+    windowMs: HOUR,
+    max: int("RL_AI_MAX", 40),
+    message:
+      "You've reached the AI question limit for now, please try again later.",
+  },
+  // Warming a document's index when the Ask AI panel is opened. Separate from
+  // the tier above so browsing documents cannot eat the question allowance;
+  // higher, because after the first call for a document it does nothing.
+  aiPrepare: {
+    name: "ai-prepare",
+    windowMs: HOUR,
+    max: int("RL_AI_PREPARE_MAX", 120),
+    message: "Too many requests, please slow down.",
+  },
   // Generic authenticated API fallback.
   api: {
     name: "api",

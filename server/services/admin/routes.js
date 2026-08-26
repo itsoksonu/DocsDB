@@ -25,6 +25,7 @@ import Earnings from "../../shared/models/Earnings.js";
 import { getDocumentViewStats } from "../../shared/utils/analytics.js";
 import { enqueueProcessing } from "../../shared/queues/processQueue.js";
 import { invalidateDocumentPreview } from "../../shared/utils/documentPreview.js";
+import { invalidateDocumentIndex } from "../../shared/utils/documentIndex.js";
 import {
   regenerateThumbnail,
   checkMetadataProviders,
@@ -912,6 +913,7 @@ router.post(
       await document.save();
 
       await invalidateDocumentPreview(document._id);
+      await invalidateDocumentIndex(document._id);
 
       try {
         await enqueueProcessing(document._id, document.s3Path);

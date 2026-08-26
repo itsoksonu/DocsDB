@@ -26,6 +26,7 @@ import { CollectionModal } from "../../components/common/CollectionModal";
 import { ShareModal } from "../../components/common/ShareModal";
 import { DocumentViewer } from "../../components/ui/DocumentViewer";
 import { DocumentViewerSkeleton } from "../../components/ui/DocumentViewerSkeleton";
+import { AskAiPanel } from "../../components/ui/AskAiPanel";
 import axios from "axios";
 
 const DocumentViewerPage = ({
@@ -306,7 +307,7 @@ const DocumentViewerPage = ({
                   <div className="flex flex-col gap-2">
                     <button
                       onClick={handleDownload}
-                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors text-sm w-full"
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-white hover:bg-white/80 text-black rounded-lg transition-colors text-sm font-semibold w-full"
                     >
                       <Download size={16} />
                       Download
@@ -459,6 +460,7 @@ const DocumentViewerPage = ({
                     viewUrl={viewUrl}
                     onDownload={handleDownload}
                   />
+                  <AskAiPanel document={document} isLoggedIn={Boolean(user)} />
                 </div>
               </div>
 
@@ -533,24 +535,15 @@ export async function getServerSideProps(context) {
       };
     }
 
-    // 2. Fetch related documents
-    let relatedDocs = [];
-    try {
-      const relatedResponse = await axios.get(
-        `${apiUrl}/feed/related/${document._id}`,
-        { params: { limit: 6 } },
-      );
-      relatedDocs = relatedResponse.data?.data || [];
-    } catch (err) {
-      console.error("Error fetching related docs for SSR:", err.message);
-      // Don't fail the whole page if related docs fail
-    }
-
+    // Related documents are deliberately NOT fetched here. They are a
+    // below-the-fold sidebar, and fetching them server-side cost a second
+    // round trip - it cannot be run in parallel because it needs the id that
+    // the first response returns - which every click waited on before the
+    // browser could paint anything. The client loads them on mount instead.
     return {
       props: {
         initialDocument: document,
         initialViewUrl: viewUrl || null,
-        initialRelatedDocs: relatedDocs,
       },
     };
   } catch (error) {

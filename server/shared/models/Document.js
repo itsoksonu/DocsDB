@@ -71,6 +71,24 @@ const documentSchema = new mongoose.Schema({
       type: [Number],
       select: false,
     },
+    // State of this document's DocumentChunk index, which powers Ask AI.
+    // Written when the index is built (lazily, on the first question) and
+    // cleared on reprocess. Kept here so answering a question does not need a
+    // count query, and so the model that produced the vectors is known - a
+    // change in the admin panel makes every existing chunk incomparable.
+    aiIndex: {
+      chunkCount: Number,
+      totalChars: Number,
+      // Set when the file was longer than the extraction ceiling, so the panel
+      // can say that the tail of the document is not covered.
+      truncated: Boolean,
+      embeddingModel: String,
+      builtAt: Date,
+      // How the passages were written. An index in an older format is thrown
+      // away and rebuilt rather than read wrongly - the passages are derived
+      // from the file, so rebuilding costs nothing but the work.
+      format: Number,
+    },
     visibility: {
       type: String,
     enum: ['public', 'private', 'unlisted'],

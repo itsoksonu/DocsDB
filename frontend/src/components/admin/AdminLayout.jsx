@@ -12,6 +12,7 @@ import {
   X,
   ShieldAlert,
   DownloadCloud,
+  ArrowLeft,
 } from "lucide-react";
 
 const AdminLayout = ({ children }) => {
@@ -119,6 +120,13 @@ const AdminLayout = ({ children }) => {
 
           {/* Footer */}
           <div className="p-4 border-t border-dark-800">
+            <Link
+              href="/"
+              className="w-full flex items-center gap-3 px-4 py-2 mb-2 text-sm text-dark-300 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
+            >
+              <ArrowLeft size={18} />
+              <span>Back to app</span>
+            </Link>
             <div className="flex items-center gap-3 px-4 py-3 mb-2">
               <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 font-bold">
                 {user.name.charAt(0).toUpperCase()}

@@ -15,6 +15,7 @@
     "axios": "^1.6.0",
     "clsx": "^2.0.0",
     "date-fns": "^4.1.0",
+    "docsdb-root": "file:..",
     "docx-preview": "^0.4.0",
     "dom-to-image-more": "^3.7.2",
     "exceljs": "^4.4.0",
@@ -28,7 +29,9 @@
     "react-dom": "18.2.0",
     "react-hot-toast": "2.4.1",
     "react-icons": "^5.5.0",
+    "react-markdown": "^9.1.0",
     "react-pdf": "^10.4.1",
+    "remark-gfm": "^4.0.1",
     "socket.io-client": "^4.8.3",
     "ssf": "^0.11.2",
     "tailwind-merge": "^2.0.0"

@@ -6,13 +6,25 @@ import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import Document from "../../shared/models/Document.js";
 import SavedDocument from "../../shared/models/SavedDocument.js";
 import UserCollection from "../../shared/models/UserCollection.js";
-import { enqueueProcessing } from "../../shared/queues/processQueue.js";
+import {
+  enqueueProcessing,
+  enqueueEmbedding,
+} from "../../shared/queues/processQueue.js";
 import { looksLikeObjectId } from "../../shared/utils/slug.js";
 import { releaseStoredFile } from "../../shared/utils/storage.js";
 import {
   getDocumentPreview,
   invalidateDocumentPreview,
 } from "../../shared/utils/documentPreview.js";
+import {
+  buildContext,
+  prepareDocumentIndex,
+  invalidateDocumentIndex,
+} from "../../shared/utils/documentIndex.js";
+import {
+  streamDocumentAnswer,
+  MAX_QUESTION_CHARS,
+} from "../../shared/utils/documentAi.js";
 import { trackView, trackDownload } from "../../shared/utils/analytics.js";
 import { getRedis } from "../../shared/utils/redis.js";
 import S3Manager from "../../shared/utils/s3.js";
@@ -31,6 +43,10 @@ const MAX_MANUAL_RETRIES = 5;
 // and let it be requeued; the job-id de-duplication in enqueueProcessing stops
 // a genuinely live run from being doubled up.
 const STALE_PROCESSING_MS = 30 * 60 * 1000;
+
+// Hard ceiling on one Ask AI answer. A provider that stops sending tokens
+// half-way would otherwise hold the connection open until the socket dies.
+const ASK_TIMEOUT_MS = 90 * 1000;
 
 function isStuckInProcessing(document) {
   if (document.status !== "processing") return false;
@@ -468,6 +484,10 @@ router.delete(
       document.status = "deleted";
       await document.save();
 
+      // The retrieval passages hold a copy of the document's text, so they go
+      // with it rather than sitting in the collection unreferenced.
+      await invalidateDocumentIndex(document._id);
+
       res.json({
         success: true,
         message: "Document deleted successfully",
@@ -659,6 +679,290 @@ router.get(
   },
 );
 
+// Warm a document's retrieval index. Called when the Ask AI panel is opened,
+// so extraction, embedding and vector loading happen while the user is typing
+// instead of adding seconds to their first question. Idempotent and cheap once
+// the index exists.
+router.post(
+  "/:id/ask/prepare",
+  authMiddleware,
+  rateLimitMiddleware("aiPrepare"),
+  async (req, res) => {
+    const startedAt = Date.now();
+
+    try {
+      const { id } = req.params;
+
+      if (!isValidIdentifier(id)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid document ID" });
+      }
+
+      const document = await findByIdOrSlug(id);
+
+      if (!document) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Document not found" });
+      }
+
+      const isOwner = document.userId.toString() === req.user.userId;
+
+      if (!document.isViewable() && !isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: "You do not have permission to view this document",
+        });
+      }
+
+      if (!document.s3Path) {
+        return res.status(409).json({
+          success: false,
+          message: "The original file is no longer available",
+        });
+      }
+
+      const prepared = await prepareDocumentIndex(document);
+
+      if (!prepared) {
+        // Told now rather than after the user has typed a question and waited.
+        return res.status(422).json({
+          success: false,
+          message:
+            "This document has no readable text, so AI cannot answer questions about it.",
+        });
+      }
+
+      // Passages still without a vector become a queued job rather than work
+      // done here: it takes minutes on a rate-limited tier, and it must finish
+      // whether or not the reader stays on the page. The stable job id means
+      // this is safe to call on every panel open.
+      if (prepared.remaining > 0) {
+        try {
+          await enqueueEmbedding(document._id);
+        } catch (error) {
+          // The document is still answerable from its opening section, so a
+          // queue problem is not worth failing the request over.
+          logger.error(
+            `Ask AI: could not queue embedding for ${document._id}:`,
+            error,
+          );
+        }
+      }
+
+      logger.info(
+        `Ask AI prepare ${document._id} passages=${
+          prepared.chunkCount
+        } pending=${prepared.remaining} mode=${prepared.mode} cache=${
+          prepared.cache
+        } index=${prepared.timings.indexMs}ms load=${
+          prepared.timings.loadMs
+        }ms total=${Date.now() - startedAt}ms`,
+      );
+
+      res.json({
+        success: true,
+        data: {
+          // False while passages are still being embedded: questions are
+          // answerable, but from the document's opening section only.
+          ready: prepared.remaining === 0,
+          mode: prepared.mode,
+          truncated: prepared.truncated,
+          remaining: prepared.remaining,
+        },
+      });
+    } catch (error) {
+      logger.error("Ask AI prepare failed:", error);
+      res.status(502).json({
+        success: false,
+        message: "Could not read this document. Please try again later.",
+      });
+    }
+  },
+);
+
+// "Ask AI": answer a question about one document, streamed as Server-Sent
+// Events so the answer appears as it is generated instead of after ten seconds
+// of nothing.
+//
+// Every failure that can be detected up front (permissions, an unreadable file,
+// a bad question) is answered with an ordinary JSON status code. The event
+// stream is only opened once the answer is actually about to start, because
+// once headers are sent the status code is fixed at 200.
+router.post(
+  "/:id/ask",
+  authMiddleware,
+  rateLimitMiddleware("ai"),
+  async (req, res, next) => {
+    const requestStartedAt = Date.now();
+
+    try {
+      const { id } = req.params;
+
+      if (!isValidIdentifier(id)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid document ID" });
+      }
+
+      const question = String(req.body?.question || "").trim();
+
+      if (!question) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Please enter a question" });
+      }
+
+      if (question.length > MAX_QUESTION_CHARS) {
+        return res.status(400).json({
+          success: false,
+          message: `Questions are limited to ${MAX_QUESTION_CHARS} characters`,
+        });
+      }
+
+      const document = await findByIdOrSlug(id);
+
+      if (!document) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Document not found" });
+      }
+
+      const isOwner = document.userId.toString() === req.user.userId;
+
+      if (!document.isViewable() && !isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: "You do not have permission to view this document",
+        });
+      }
+
+      if (!document.s3Path) {
+        return res.status(409).json({
+          success: false,
+          message: "The original file is no longer available",
+        });
+      }
+
+      // Retrieval, not the first N characters: the passages relevant to this
+      // question. The first question about a document also builds its index,
+      // which is why this happens before the stream is opened - a failure here
+      // is still a real status code rather than an error event.
+      let context;
+      try {
+        context = await buildContext(document, {
+          question,
+          history: Array.isArray(req.body?.history) ? req.body.history : [],
+        });
+      } catch (error) {
+        logger.error(`Ask AI context build failed for ${document._id}:`, error);
+        return res.status(502).json({
+          success: false,
+          message: "Could not read this document. Please try again later.",
+        });
+      }
+
+      if (!context) {
+        // Scanned images, an empty spreadsheet, a deck of pictures. The
+        // pipeline can OCR these; a request cannot wait that long.
+        return res.status(422).json({
+          success: false,
+          message:
+            "This document has no readable text, so AI cannot answer questions about it.",
+        });
+      }
+
+      // compression() buffers a response until it has a full block, which would
+      // hold every token back; "no-transform" tells it to leave this one alone.
+      // X-Accel-Buffering does the same for an nginx proxy in front.
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.flushHeaders();
+
+      // A token can already be in flight when the client disconnects, and
+      // writing to a destroyed response emits an unhandled error.
+      const send = (event, data) => {
+        if (res.writableEnded || res.destroyed) return;
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      const controller = new AbortController();
+
+      // The client closing the tab, or pressing stop, must stop us paying a
+      // provider for tokens nobody will read.
+      req.on("close", () => controller.abort());
+
+      const streamStartedAt = Date.now();
+      let firstTokenAt = 0;
+
+      const timeout = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+
+      try {
+        send("meta", {
+          mode: context.mode,
+          truncated: context.truncated,
+          totalChars: context.totalChars,
+        });
+
+        // Sent before the answer so the panel can show what it was built from
+        // even if generation then fails half-way.
+        if (context.sources.length) {
+          send("sources", { sources: context.sources });
+        }
+
+        const { cut, promptChars } = await streamDocumentAnswer({
+          document,
+          context,
+          question,
+          history: req.body?.history,
+          signal: controller.signal,
+          onToken: (token) => {
+            if (!firstTokenAt) firstTokenAt = Date.now();
+            send("token", { text: token });
+          },
+          onProvider: (provider) => send("provider", { provider }),
+        });
+
+        // `cut` means the model stopped at the token ceiling, so the panel can
+        // say the answer is incomplete rather than leaving a hanging sentence.
+        send("done", { cut });
+
+        // The wait before the first token is what users feel. Attributing it -
+        // indexing, embedding the question, loading passages, or the provider
+        // itself - is otherwise guesswork.
+        const t = context.timings || {};
+        logger.info(
+          `Ask AI ${document._id} mode=${context.mode} passages=${
+            context.blocks.length
+          } prompt=~${Math.round(promptChars / 4)}tok cache=${t.cache} index=${
+            t.indexMs
+          }ms embed=${t.embedMs}ms(${
+            t.queryCache || "n/a"
+          }) load=${t.loadMs}ms select=${t.selectMs}ms provider=${
+            firstTokenAt ? firstTokenAt - streamStartedAt : "n/a"
+          }ms total=${Date.now() - requestStartedAt}ms`,
+        );
+      } catch (error) {
+        logger.error(`Ask AI failed for ${document._id}:`, error);
+        send("error", {
+          message:
+            "The AI assistant is unavailable right now. Please try again.",
+        });
+      } finally {
+        clearTimeout(timeout);
+        res.end();
+      }
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
 // Retry processing for a document that failed, or that got stuck before a
 // worker ever picked it up. Reuses the existing S3 object - the user does not
 // have to upload the file again.
@@ -753,6 +1057,7 @@ router.post(
       await document.save();
 
       await invalidateDocumentPreview(document._id);
+      await invalidateDocumentIndex(document._id);
 
       try {
         await enqueueProcessing(document._id, document.s3Path);
