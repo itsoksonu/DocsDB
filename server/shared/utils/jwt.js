@@ -2,6 +2,11 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import logger from './logger.js';
 
+// Kept here and exported so the RefreshToken record's expiresAt cannot drift
+// away from the JWT's own exp claim.
+export const REFRESH_TOKEN_TTL = '30d';
+export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 class JWTManager {
   constructor() {
     this.accessSecret = process.env.JWT_SECRET;
@@ -24,14 +29,23 @@ class JWTManager {
   generateAccessToken(payload) {
     return jwt.sign(payload, this.accessSecret, {
       expiresIn: '15m',
+      algorithm: 'HS256',
       issuer: 'docsdb-platform',
       audience: 'docsdb-users'
     });
   }
 
-  generateRefreshToken(payload) {
-    return jwt.sign(payload, this.refreshSecret, {
-      expiresIn: '30d',
+  /**
+   * Refresh tokens carry a `jti` and a `family`, which is what makes them
+   * revocable - see shared/utils/refreshTokens.js and models/RefreshToken.js.
+   * Deliberately no email/role claims: /refresh reads those from the database so
+   * a demoted or suspended user cannot roll old claims forward.
+   */
+  generateRefreshToken({ userId, jti, familyId }) {
+    return jwt.sign({ userId, family: familyId }, this.refreshSecret, {
+      expiresIn: REFRESH_TOKEN_TTL,
+      algorithm: 'HS256',
+      jwtid: jti,
       issuer: 'docsdb-platform',
       audience: 'docsdb-users'
     });
@@ -40,6 +54,9 @@ class JWTManager {
   verifyAccessToken(token) {
     try {
       return jwt.verify(token, this.accessSecret, {
+        // Pinned: without this, jsonwebtoken infers the acceptable algorithms
+        // from the key type. Naming it removes any room for algorithm confusion.
+        algorithms: ['HS256'],
         issuer: 'docsdb-platform',
         audience: 'docsdb-users'
       });
@@ -52,6 +69,7 @@ class JWTManager {
   verifyRefreshToken(token) {
     try {
       return jwt.verify(token, this.refreshSecret, {
+        algorithms: ['HS256'],
         issuer: 'docsdb-platform',
         audience: 'docsdb-users'
       });

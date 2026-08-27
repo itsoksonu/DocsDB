@@ -17,6 +17,7 @@ import {
 } from "../../shared/utils/moderationEngine.js";
 import logger from "../../shared/utils/logger.js";
 import { escapeRegex } from "../../shared/utils/regex.js";
+import { revokeAllForUser } from "../../shared/utils/refreshTokens.js";
 import s3 from "../../shared/utils/s3.js";
 import databaseManager from "../../shared/database/connection.js";
 import { cachedCount } from "../../shared/utils/cachedCount.js";
@@ -412,6 +413,17 @@ router.patch(
       }
 
       await user.save();
+
+      // End their sessions rather than only blocking new requests. authMiddleware
+      // already rejects a non-active user on every call, so this is defence in
+      // depth - but it also means the suspended account cannot silently hold a
+      // valid 30-day refresh token waiting for the suspension to be lifted.
+      if (status !== "active") {
+        const revoked = await revokeAllForUser(userId, `admin_${status}`);
+        logger.info(
+          `[admin] ${status} user ${userId} - revoked ${revoked} refresh token(s)`
+        );
+      }
 
       await logAdminAction({
         adminId,

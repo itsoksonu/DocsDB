@@ -2,9 +2,17 @@ import express from "express";
 import User from "../../shared/models/User.js";
 import Document from "../../shared/models/Document.js";
 import SavedDocument from "../../shared/models/SavedDocument.js";
-import JWTManager from "../../shared/utils/jwt.js";
+import JWTManager, { REFRESH_TOKEN_TTL_MS } from "../../shared/utils/jwt.js";
+import {
+  rotateRefreshToken,
+  revokeFamily,
+  revokeAllForUser,
+  refreshCookieOptions,
+  RefreshTokenError,
+} from "../../shared/utils/refreshTokens.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
+import logger from "../../shared/utils/logger.js";
 import s3 from "../../shared/utils/s3.js";
 
 const router = express.Router();
@@ -83,36 +91,36 @@ router.post("/refresh", rateLimitMiddleware("auth"), async (req, res, next) => {
       });
     }
 
-    const decoded = JWTManager.verifyRefreshToken(refreshToken);
+    // Rotates the family: consumes the presented token and issues its
+    // successor, revoking the whole family if this token was already used (which
+    // means someone else has a copy). See shared/utils/refreshTokens.js.
+    const rotated = await rotateRefreshToken(refreshToken, req);
 
-    // Rebuild the claims from the database rather than copying them out of the
-    // presented token: otherwise a demoted, suspended or deleted user keeps
-    // their original role for the whole 30-day refresh window by rolling the
-    // token forward.
-    const user = await User.findById(decoded.userId).select("email role status");
+    // Claims come from the database, not from the presented token: otherwise a
+    // demoted, suspended or deleted user keeps their original role for the whole
+    // 30-day refresh window by rolling the token forward.
+    const user = await User.findById(rotated.userId).select("email role status");
 
     if (!user || user.status !== "active") {
+      // The account is gone or disabled, so nothing in this family should keep
+      // working - including the token just issued.
+      await revokeFamily(rotated.familyId, "account_inactive");
+      res.clearCookie("refreshToken", refreshCookieOptions());
       return res.status(401).json({
         success: false,
         message: "Account is no longer active",
       });
     }
 
-    const tokenPayload = {
+    const newAccessToken = JWTManager.generateAccessToken({
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
-    };
+    });
 
-    const newAccessToken = JWTManager.generateAccessToken(tokenPayload);
-    const newRefreshToken = JWTManager.generateRefreshToken(tokenPayload);
-
-    res.cookie("refreshToken", newRefreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-      path: "/",
+    res.cookie("refreshToken", rotated.token, {
+      ...refreshCookieOptions(),
+      maxAge: REFRESH_TOKEN_TTL_MS,
     });
 
     res.json({
@@ -124,6 +132,16 @@ router.post("/refresh", rateLimitMiddleware("auth"), async (req, res, next) => {
       },
     });
   } catch (error) {
+    // Every rejection answers the same way. The reason is logged, never returned:
+    // telling a caller apart "already used" from "not recognised" would help
+    // someone probing with a stolen token.
+    if (error instanceof RefreshTokenError) {
+      logger.warn(`[auth] refresh rejected (${error.reason})`);
+    } else {
+      logger.error("[auth] refresh failed:", error);
+    }
+
+    res.clearCookie("refreshToken", refreshCookieOptions());
     res.status(401).json({
       success: false,
       message: "Invalid refresh token",
@@ -131,18 +149,48 @@ router.post("/refresh", rateLimitMiddleware("auth"), async (req, res, next) => {
   }
 });
 
-// Logout
-router.post("/logout", (req, res) => {
-  res.clearCookie("refreshToken", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    path: "/",
-  });
+// Logout - now actually revokes rather than only clearing the cookie.
+router.post("/logout", async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (refreshToken) {
+    try {
+      const decoded = JWTManager.verifyRefreshToken(refreshToken);
+      // Revoke the family, not just this token: a logout should end the session,
+      // and any successor already issued in a race belongs to the same family.
+      const revoked = await revokeFamily(decoded.family, "logout");
+      logger.info(`[auth] logout revoked ${revoked} refresh token(s)`);
+    } catch (error) {
+      // An unverifiable cookie still gets cleared - logout must never fail.
+      logger.warn(`[auth] logout with an unusable refresh token: ${error.message}`);
+    }
+  }
+
+  res.clearCookie("refreshToken", refreshCookieOptions());
   res.json({
     success: true,
     message: "Logout successful",
   });
+});
+
+// Sign out of every device. Separate from /logout so the ordinary case stays
+// cheap and this one is an explicit, deliberate action.
+router.post("/logout-all", authMiddleware, async (req, res, next) => {
+  try {
+    const revoked = await revokeAllForUser(req.user.userId, "logout_all");
+    logger.info(
+      `[auth] user ${req.user.userId} signed out everywhere (${revoked} token(s))`
+    );
+
+    res.clearCookie("refreshToken", refreshCookieOptions());
+    res.json({
+      success: true,
+      message: `Signed out of all devices`,
+      data: { sessionsEnded: revoked },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Get current user profile

@@ -14,8 +14,11 @@ class APIService {
 
     this.setupInterceptors();
     this.searchCache = new Map();
-    this.isRefreshing = false;
-    this.failedQueue = [];
+    // The one in-flight refresh, shared by every caller. Replaces the previous
+    // isRefreshing flag + failedQueue pair, which only covered the axios
+    // interceptor and left askDocumentAi and the AuthContext timer able to start
+    // a second, concurrent refresh.
+    this.refreshPromise = null;
   }
 
   setupInterceptors() {
@@ -48,59 +51,25 @@ class APIService {
         }
 
         if (error.response?.status === 401 && !originalRequest._retry) {
-          if (this.isRefreshing) {
-            // If refresh is already in progress, queue this request
-            return new Promise((resolve, reject) => {
-              this.failedQueue.push({ resolve, reject });
-            })
-              .then(() => {
-                const token = localStorage.getItem("accessToken");
-                if (token) {
-                  originalRequest.headers.Authorization = `Bearer ${token}`;
-                }
-                return this.client(originalRequest);
-              })
-              .catch((err) => {
-                return Promise.reject(err);
-              });
-          }
-
           originalRequest._retry = true;
-          this.isRefreshing = true;
 
           try {
-            const response = await this.refreshToken();
-            const accessToken =
-              response.data?.data?.accessToken || response.data?.accessToken;
+            // Concurrent 401s all await the same refresh, then each retries its
+            // own request. Previously a second refresh could be started in
+            // parallel, which the server now reads as token replay.
+            const accessToken = await this.ensureFreshToken();
 
-            if (!accessToken) {
-              throw new Error("Invalid refresh response");
-            }
-
-            localStorage.setItem("accessToken", accessToken);
-
-            // Process queued requests
-            this.processQueue(null, accessToken);
-
-            // Retry the original request
             originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             return this.client(originalRequest);
           } catch (refreshError) {
-            console.error(
-              "API interceptor: Token refresh failed",
-              refreshError,
-            );
+            console.error("API interceptor: Token refresh failed", refreshError);
 
-            // Process queued requests with error
-            this.processQueue(refreshError, null);
-
-            // Only clear token and redirect if refresh token is invalid/expired
+            // Only drop the token when the refresh itself was rejected; a network
+            // blip should not sign the user out.
             if (refreshError.response?.status === 401) {
               localStorage.removeItem("accessToken");
             }
             return Promise.reject(refreshError);
-          } finally {
-            this.isRefreshing = false;
           }
         }
 
@@ -128,16 +97,40 @@ class APIService {
     );
   }
 
-  processQueue(error, token = null) {
-    this.failedQueue.forEach(({ resolve, reject }) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve(token);
-      }
-    });
+  /**
+   * The single place a refresh may be requested from.
+   *
+   * The server now rotates refresh tokens and revokes the whole family if one is
+   * presented twice, so two concurrent refreshes are no longer merely wasteful -
+   * the loser looks exactly like a stolen token being replayed and signs the user
+   * out. Everything that might refresh has to funnel through here.
+   *
+   * Concurrent callers share one in-flight promise rather than being queued: they
+   * all await the same request and then retry their own work.
+   */
+  async ensureFreshToken() {
+    if (this.refreshPromise) return this.refreshPromise;
 
-    this.failedQueue = [];
+    this.refreshPromise = (async () => {
+      try {
+        const response = await this.refreshToken();
+        const accessToken =
+          response.data?.accessToken || response.accessToken;
+
+        if (!accessToken) {
+          throw new Error("Invalid refresh response");
+        }
+
+        localStorage.setItem("accessToken", accessToken);
+        return accessToken;
+      } finally {
+        // Cleared before the promise settles for the caller, so the next 401
+        // starts a fresh attempt instead of reusing a rejected one.
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
   }
 
   //auth endpoints
@@ -269,13 +262,17 @@ class APIService {
     let response = await send(localStorage.getItem("accessToken"));
 
     if (response.status === 401) {
-      const refreshed = await this.refreshToken();
-      const accessToken =
-        refreshed?.data?.accessToken || refreshed?.accessToken;
+      // Via ensureFreshToken, not refreshToken: this used to bypass the
+      // interceptor's lock entirely, so an SSE 401 landing alongside an axios
+      // 401 fired two refreshes - which the server now treats as replay and
+      // answers by revoking the session.
+      let accessToken;
+      try {
+        accessToken = await this.ensureFreshToken();
+      } catch {
+        throw new Error("Your session has expired");
+      }
 
-      if (!accessToken) throw new Error("Your session has expired");
-
-      localStorage.setItem("accessToken", accessToken);
       response = await send(accessToken);
     }
 

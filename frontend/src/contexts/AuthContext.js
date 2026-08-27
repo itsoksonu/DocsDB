@@ -50,12 +50,13 @@ export const AuthProvider = ({ children }) => {
     refreshingRef.current = true;
     setRefreshing(true);
     try {
-      const response = await apiService.refreshToken();
-      const newAccessToken = response.data.accessToken;
+      // ensureFreshToken, not refreshToken: it shares one in-flight request with
+      // the axios interceptor and the Ask AI stream. The server rotates refresh
+      // tokens and reads a second concurrent use as replay, so these three paths
+      // must not each start their own.
+      const newAccessToken = await apiService.ensureFreshToken();
 
       if (newAccessToken) {
-        localStorage.setItem("accessToken", newAccessToken);
-
         // Fetch user data if we don't have it
         if (!userRef.current) {
           try {

@@ -4,7 +4,11 @@ import { OAuth2Client } from "google-auth-library";
 import User from "../../shared/models/User.js";
 import UserAuthProvider from "../../shared/models/UserAuthProvider.js";
 import UserWallet from "../../shared/models/UserWallet.js";
-import JWTManager from "../../shared/utils/jwt.js";
+import JWTManager, { REFRESH_TOKEN_TTL_MS } from "../../shared/utils/jwt.js";
+import {
+  issueRefreshToken,
+  refreshCookieOptions,
+} from "../../shared/utils/refreshTokens.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 
@@ -105,14 +109,18 @@ router.post(
       };
 
       const accessTokenJWT = JWTManager.generateAccessToken(tokenPayload);
-      const refreshTokenJWT = JWTManager.generateRefreshToken(tokenPayload);
+
+      // A login starts a new refresh-token family (no familyId passed). Every
+      // token later rotated from it stays in that family, so revoking the family
+      // ends exactly this session.
+      const { token: refreshTokenJWT } = await issueRefreshToken({
+        userId: user._id,
+        req,
+      });
 
       res.cookie("refreshToken", refreshTokenJWT, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        path: '/',
+        ...refreshCookieOptions(),
+        maxAge: REFRESH_TOKEN_TTL_MS,
       });
 
       res.json({
