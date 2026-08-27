@@ -1,5 +1,113 @@
 import withPWAInit from "@ducanh2912/next-pwa";
 
+const isDev = process.env.NODE_ENV !== "production";
+
+/**
+ * Content-Security-Policy, built from the environment rather than hardcoded,
+ * because the API origin differs per deployment (NEXT_PUBLIC_API_URL is
+ * http://localhost:3001/api/v1 locally and the real API in production).
+ *
+ * Every entry below corresponds to something this app actually loads - the list
+ * was derived by grepping src/ for external origins, not guessed:
+ *
+ *   accounts.google.com   Google Sign-In: script, iframe, style and token calls
+ *   fonts.googleapis.com  the Playfair Display stylesheet in _document.js
+ *   fonts.gstatic.com     the font files that stylesheet references
+ *   *.amazonaws.com       presigned S3 URLs, loaded as <img> and fetched by
+ *                         useRawFile for the docx/xlsx/pptx viewers
+ *   lh3.googleusercontent.com  Google profile pictures, stored as absolute URLs
+ *   <api origin>          REST calls and the socket.io connection (ws/wss too)
+ *
+ * The motivating threat: pptx-preview bundles a version of echarts with an
+ * unpatched XSS (GHSA-fgmj-fm8m-jvvx) and no fixed release exists, and it renders
+ * attacker-supplied decks client-side. A CSP is the only mitigation available.
+ */
+function buildCsp() {
+  // Origin only - NEXT_PUBLIC_API_URL carries a /api/v1 path that CSP would
+  // otherwise treat as a path prefix.
+  let apiOrigin = "";
+  let apiSocket = "";
+  try {
+    const api = new URL(process.env.NEXT_PUBLIC_API_URL);
+    apiOrigin = api.origin;
+    apiSocket = `${api.protocol === "https:" ? "wss" : "ws"}://${api.host}`;
+  } catch {
+    // Unset or malformed: fall through with 'self' only. Reported at build time
+    // by the warning below rather than silently producing a broken policy.
+  }
+
+  const google = "https://accounts.google.com";
+  const s3 = "https://*.amazonaws.com";
+
+  const directives = {
+    "default-src": ["'self'"],
+
+    // 'unsafe-inline' is required: Next's pages router injects inline bootstrap
+    // and __NEXT_DATA__ scripts, and moving to nonces means a custom _document
+    // plus middleware. 'unsafe-eval' is dev-only - webpack's eval source maps
+    // need it, a production build does not.
+    "script-src": [
+      "'self'",
+      "'unsafe-inline'",
+      google,
+      ...(isDev ? ["'unsafe-eval'"] : []),
+    ],
+
+    // Inline styles come from framer-motion, docx-preview and Tailwind's
+    // arbitrary values; Google Sign-In injects its own stylesheet.
+    "style-src": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", google],
+    "font-src": ["'self'", "data:", "https://fonts.gstatic.com"],
+
+    // blob: covers canvas/pdf.js output; S3 for presigned thumbnails; Google for
+    // OAuth profile pictures.
+    "img-src": [
+      "'self'",
+      "data:",
+      "blob:",
+      s3,
+      "https://lh3.googleusercontent.com",
+    ],
+
+    "connect-src": [
+      "'self'",
+      s3,
+      google,
+      ...(apiOrigin ? [apiOrigin] : []),
+      ...(apiSocket ? [apiSocket] : []),
+      // Next's dev server talks to itself over a websocket for HMR.
+      ...(isDev ? ["ws://localhost:3000", "http://localhost:3000"] : []),
+    ],
+
+    // pdf.js runs its worker from /pdf.worker.min.mjs, and may wrap it in a blob.
+    "worker-src": ["'self'", "blob:"],
+    "frame-src": [google],
+    "manifest-src": ["'self'"],
+
+    "object-src": ["'none'"],
+    "base-uri": ["'self'"],
+    "form-action": ["'self'"],
+    "frame-ancestors": ["'none'"],
+  };
+
+  return Object.entries(directives)
+    .map(([name, values]) => `${name} ${values.join(" ")}`)
+    .join("; ");
+}
+
+if (!process.env.NEXT_PUBLIC_API_URL) {
+  console.warn(
+    "[next.config] NEXT_PUBLIC_API_URL is not set - the CSP will not allow API calls."
+  );
+}
+
+// Roll-out switch. Set CSP_REPORT_ONLY=true to have the browser report
+// violations to the console without blocking anything, confirm the console is
+// clean across sign-in / PDF view / office preview / upload, then unset it.
+const cspHeaderName =
+  process.env.CSP_REPORT_ONLY === "true"
+    ? "Content-Security-Policy-Report-Only"
+    : "Content-Security-Policy";
+
 const withPWA = withPWAInit({
   dest: "public",
   cacheOnFrontEndNav: true,
@@ -93,9 +201,17 @@ const nextConfig = {
             value: "DENY",
           },
           {
-            key: "X-XSS-Protection",
-            value: "1; mode=block",
+            key: cspHeaderName,
+            value: buildCsp(),
           },
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
+          },
+          // X-XSS-Protection was removed rather than kept: it is a no-op in every
+          // current browser, and in the old ones that did honour it the filter
+          // could itself be abused to suppress legitimate script. The CSP above
+          // is what actually provides this protection now.
         ],
       },
     ];
