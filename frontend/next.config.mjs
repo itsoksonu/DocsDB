@@ -45,12 +45,35 @@ const nextConfig = {
   },
   images: {
     domains: ["docsdb-upload.amazonaws.com"],
+    // next/image is not used anywhere in this app (every image is a raw <img>),
+    // but configuring `images` at all leaves the /_next/image optimizer route
+    // live - and that endpoint is the target of most of the Next advisories that
+    // still apply to 14.x: DoS via remotePatterns, cache confusion, unbounded
+    // disk cache growth, content injection.
+    //
+    // With unoptimized:true, next-server.js render404s that route *before* it
+    // validates params or fetches anything upstream, which closes the whole
+    // class. If next/image is adopted later, remove this line - images will
+    // otherwise be served at full size.
+    unoptimized: true,
   },
 
-// you may think that this experimental key is obsolete, and doesnt seem to do anything. and you would be correct. but when we remove this key for some reason the whole program crashes and we cant figure out why, so here it will stay.
-
+  // DO NOT REMOVE esmExternals: false.
+  //
+  // This block previously also carried `runtime: "nodejs"`, with a note saying
+  // removing it crashed the app. It was the wrong suspect: `runtime` was a Next
+  // 12/13 option that no longer exists in 14 - it appears zero times in
+  // next/dist/server/config-schema.js, nothing in next/dist reads it, and
+  // `next build` printed "Unrecognized key(s) in object: 'runtime'" on every
+  // build. It could not have been doing anything.
+  //
+  // `esmExternals: false` is the load-bearing one. It IS in the schema and is
+  // read by next/dist/build/handle-externals.js, which decides how ESM packages
+  // are externalized - i.e. exactly how pdfjs-dist and react-pdf get bundled,
+  // the same interop the webpack alias above exists to work around. Deleting the
+  // whole `experimental` block takes this with it, which is almost certainly
+  // what broke production the last time.
   experimental: {
-    runtime: "nodejs",
     esmExternals: false,
   },
   env: {

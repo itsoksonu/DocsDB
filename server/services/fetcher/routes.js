@@ -4,7 +4,7 @@
 //   GET  /api/v1/admin/fetch-docs/:jobId
 import express from "express";
 import { body, param, validationResult } from "express-validator";
-import { v4 as uuidv4 } from "uuid";
+import crypto from "crypto";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import Document from "../../shared/models/Document.js";
 import {
@@ -43,7 +43,7 @@ router.post(
       }
 
       const { category, count } = req.body;
-      const jobId = uuidv4();
+      const jobId = crypto.randomUUID();
 
       await processDocumentQueue.add(
         "fetch-documents",

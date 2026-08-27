@@ -7,7 +7,7 @@
 //   FETCHER_CRON_COUNT_PER_CATEGORY=20     # default: 20
 //   FETCHER_CONTACT_EMAIL=admin@mysite.com
 import cron from "node-cron";
-import { v4 as uuidv4 } from "uuid";
+import crypto from "crypto";
 import {
   processDocumentQueue,
   FETCH_JOB_OPTIONS,
@@ -61,7 +61,7 @@ async function runFetchCycle() {
   );
 
   for (const category of selected) {
-    const jobId = uuidv4();
+    const jobId = crypto.randomUUID();
     await processDocumentQueue.add(
       "fetch-documents",
       { category, count, requestedBy: owner },

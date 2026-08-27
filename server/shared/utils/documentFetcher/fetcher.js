@@ -12,7 +12,6 @@ import crypto from "crypto";
 import os from "os";
 import path from "path";
 import fs from "fs/promises";
-import { v4 as uuidv4 } from "uuid";
 
 import S3Manager from "../s3.js";
 import Document from "../../models/Document.js";
@@ -154,7 +153,7 @@ export async function fetchDocuments({ category, count, userId, onProgress = () 
   if (!userId) throw new Error("fetchDocuments requires a userId");
 
   const adapters = resolveAdapters(category);
-  const tmpDir = path.join(os.tmpdir(), `docsdb-fetcher-${uuidv4()}`);
+  const tmpDir = path.join(os.tmpdir(), `docsdb-fetcher-${crypto.randomUUID()}`);
   await fs.mkdir(tmpDir, { recursive: true });
 
   const documents = [];
@@ -269,11 +268,11 @@ export async function fetchDocuments({ category, count, userId, onProgress = () 
       batchHashes.add(fileHash);
 
       // Persist to a temp file (honours the documented temp-dir contract).
-      const filePath = path.join(tmpDir, `${uuidv4()}.${ext}`);
+      const filePath = path.join(tmpDir, `${crypto.randomUUID()}.${ext}`);
       await fs.writeFile(filePath, buffer);
 
       // Upload to S3 under the shared uploads/ prefix.
-      const s3Key = `uploads/fetched/${source}/${uuidv4()}.${ext}`;
+      const s3Key = `uploads/fetched/${source}/${crypto.randomUUID()}.${ext}`;
       try {
         await S3Manager.uploadObject(
           s3Key,

@@ -229,14 +229,11 @@ const huggingface = HUGGINGFACE_TOKEN
   : null;
 const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null;
 
-let mammoth, XLSX;
+let mammoth;
 
 async function ensureDependencies() {
   if (!mammoth) {
     mammoth = (await import("mammoth")).default;
-  }
-  if (!XLSX) {
-    XLSX = (await import("xlsx")).default;
   }
 }
 
@@ -1478,13 +1475,14 @@ async function extractFromPPTX(filePath) {
 
 async function extractFromXLSX(filePath) {
   try {
-    const workbook = XLSX.readFile(filePath);
+    const { readSheetsAsCsv } = await import("./spreadsheet.js");
+    const sheets = await readSheetsAsCsv(filePath);
+
     let content = "";
-    workbook.SheetNames.forEach((sheetName) => {
-      const worksheet = workbook.Sheets[sheetName];
-      content += `Sheet: ${sheetName}\n`;
-      content += XLSX.utils.sheet_to_csv(worksheet) + "\n\n";
-    });
+    for (const { name, csv } of sheets) {
+      content += `Sheet: ${name}\n`;
+      content += `${csv}\n\n`;
+    }
     return content;
   } catch (error) {
     logger.error("XLSX extraction failed:", error);
@@ -2182,11 +2180,11 @@ async function getPPTXPageCount(filePath) {
 
 async function getXLSXPageCount(filePath) {
   try {
-    const workbook = XLSX.readFile(filePath);
-    const sheetCount = workbook.SheetNames.length;
+    const { countWorksheets } = await import("./spreadsheet.js");
+    const sheetCount = await countWorksheets(filePath);
 
     logger.info(`✓ XLSX page count: ${sheetCount} sheets`);
-    return Math.max(1, sheetCount);
+    return sheetCount;
   } catch (error) {
     logger.error("Failed to get XLSX page count:", error.message);
     return 1;

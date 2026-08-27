@@ -86,22 +86,19 @@ async function buildPptxPreview(buffer) {
 }
 
 async function buildXlsxPreview(buffer) {
-  const XLSX = (await import("xlsx")).default;
-  const workbook = XLSX.read(buffer, {
-    type: "buffer",
-    sheetRows: MAX_SHEET_ROWS,
+  const { readSheetRows } = await import("./spreadsheet.js");
+
+  // maxRows is MAX_SHEET_ROWS + 1 so clampRows can still tell that the sheet was
+  // truncated rather than happening to end exactly at the limit.
+  const sheets = await readSheetRows(buffer, {
+    maxRows: MAX_SHEET_ROWS + 1,
+    maxSheets: 20,
   });
 
-  const sheets = workbook.SheetNames.slice(0, 20).map((name) => {
-    const raw = XLSX.utils.sheet_to_json(workbook.Sheets[name], {
-      header: 1,
-      blankrows: false,
-      defval: "",
-    });
-    return { name, ...clampRows(raw) };
-  });
-
-  return { kind: "sheet", sheets };
+  return {
+    kind: "sheet",
+    sheets: sheets.map(({ name, rows }) => ({ name, ...clampRows(rows) })),
+  };
 }
 
 function buildCsvPreview(buffer) {

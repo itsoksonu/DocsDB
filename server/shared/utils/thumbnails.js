@@ -446,17 +446,12 @@ export async function generateContentThumbnail(filePath, fileType, content) {
     }
 
     case "xlsx": {
-      const XLSX = (await import("xlsx")).default;
-      const workbook = XLSX.readFile(filePath, { sheetRows: 40 });
-      const sheetName = workbook.SheetNames[0];
-      const rows = sheetName
-        ? XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-            header: 1,
-            blankrows: false,
-            defval: "",
-          })
-        : [];
-      return renderSheet(rows, sheetName, "thumb-xlsx");
+      const { readSheetRows } = await import("./spreadsheet.js");
+      const [first] = await readSheetRows(filePath, {
+        maxRows: 40,
+        maxSheets: 1,
+      });
+      return renderSheet(first?.rows ?? [], first?.name, "thumb-xlsx");
     }
 
     case "csv": {

@@ -131,12 +131,12 @@ async function extractPptx(buffer) {
 }
 
 async function extractXlsx(buffer) {
-  const XLSX = (await import("xlsx")).default;
-  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const { readSheetsAsCsv } = await import("./spreadsheet.js");
+  const sheets = await readSheetsAsCsv(buffer);
 
-  return workbook.SheetNames.map((name) => ({
+  return sheets.map(({ name, csv }) => ({
     label: `Sheet: ${name}`,
-    text: normalize(XLSX.utils.sheet_to_csv(workbook.Sheets[name])),
+    text: normalize(csv),
   }));
 }
 
